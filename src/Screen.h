@@ -8,13 +8,17 @@ namespace fv
 		int         index{ -1 };  // candidate index, -1 = automatic
 		std::string name;         // geometry name at that index (sanity check)
 		int         flip{ 0 };    // bit 0 = flip vertical, bit 1 = mirror horizontal
+		std::string owner;        // model key of the object that owns the mesh (may be a nearby object)
 	};
 
 	// Scene-graph side: finds a TV's screen geometry and points its material at one of our slot textures.
 	// Everything here must run on the game's main thread unless noted.
 	struct ScreenBinding
 	{
-		RE::NiPointer<RE::NiAVObject>       root;
+		RE::ObjectRefHandle                 owner;  // object whose mesh we drew on (the selected one, or one next to it)
+		std::string                         ownerKey;
+		bool                                ownerIsNearby{ false };
+		RE::NiPointer<RE::NiAVObject>       root;   // owner's 3D
 		RE::NiPointer<RE::BSGeometry>       geometry;
 		RE::BSShaderMaterial*               material{ nullptr };  // unique clone; we hold one intrusive ref
 		RE::NiPointer<RE::NiTexture>        slotTexture;
@@ -35,6 +39,7 @@ namespace fv
 		std::string                         geometryName;
 		bool                                bound{ false };
 		bool                                originalWasSRGB{ false };
+		float                               screenAspect{ 0.0f };  // width / height of the mesh in UV space, 0 = unknown
 	};
 
 	namespace Screen
@@ -50,7 +55,7 @@ namespace fv
 		void Unbind(ScreenBinding& a_binding);
 
 		// False if the bound mesh was detached, its material replaced, or the 3D rebuilt.
-		bool StillValid(const ScreenBinding& a_binding, RE::NiAVObject* a_currentRoot);
+		bool StillValid(const ScreenBinding& a_binding);
 
 		// Render thread: re-apply our UV mapping (cheap; undoes any UV animation from other mods).
 		void ReapplyUV(const ScreenBinding& a_binding);

@@ -94,9 +94,13 @@ namespace fv::Screen
 
 		struct Candidate
 		{
-			RE::BSGeometry* geom;
-			std::string     name;
-			std::string     pathLower;  // ancestor names joined with '/'
+			RE::BSGeometry*    geom;
+			std::string        name;
+			std::string        pathLower;  // ancestor names joined with '/'
+			RE::TESObjectREFR* owner{ nullptr };
+			RE::NiAVObject*    root{ nullptr };
+			std::string        ownerKey;
+			bool               nearby{ false };
 		};
 
 		void Collect(RE::NiAVObject* a_obj, const std::string& a_path, std::vector<Candidate>& a_out, int a_depth = 0)
@@ -122,10 +126,68 @@ namespace fv::Screen
 			}
 		}
 
-		std::vector<Candidate> Candidates(RE::NiAVObject* a_root)
+		std::string ModelKey(RE::TESObjectREFR* a_ref);
+
+		void CollectRef(RE::TESObjectREFR* a_ref, bool a_nearby, std::vector<Candidate>& a_out)
+		{
+			auto* root = a_ref ? a_ref->Get3D() : nullptr;
+			if (!root) {
+				return;
+			}
+			const auto first = a_out.size();
+			Collect(root, {}, a_out);
+			const auto key = ModelKey(a_ref);
+			for (auto i = first; i < a_out.size(); ++i) {
+				a_out[i].owner = a_ref;
+				a_out[i].root = root;
+				a_out[i].ownerKey = key;
+				a_out[i].nearby = a_nearby;
+			}
+		}
+
+		// The selected object's meshes first, then meshes of objects right next to it
+		// (e.g. a drive-in screen that has another screen object placed in front of it).
+		std::vector<Candidate> Candidates(RE::TESObjectREFR* a_ref, bool a_includeNearby)
 		{
 			std::vector<Candidate> out;
-			Collect(a_root, {}, out);
+			CollectRef(a_ref, false, out);
+
+			const float radius = Settings::Get().nearbyRadius;
+			if (!a_includeNearby || radius <= 0.0f || !a_ref) {
+				return out;
+			}
+
+			const auto                                     origin = a_ref->GetPosition();
+			std::vector<std::pair<float, RE::TESObjectREFR*>> refs;
+			auto                                           gather = [&](RE::TESObjectCELL* a_cell) {
+                if (!a_cell) {
+                    return;
+                }
+                a_cell->ForEachReferenceInRange(origin, radius, [&](RE::TESObjectREFR* a_other) {
+                    if (a_other && a_other != a_ref && !a_other->IsActor() && a_other->Get3D() &&
+                        std::ranges::find(refs, a_other, &std::pair<float, RE::TESObjectREFR*>::second) == refs.end()) {
+                        refs.emplace_back(origin.GetSquaredDistance(a_other->GetPosition()), a_other);
+                    }
+                    return RE::BSContainer::ForEachResult::kContinue;
+                });
+			};
+			gather(a_ref->GetParentCell());
+			if (auto* player = RE::PlayerCharacter::GetSingleton(); player && player->GetParentCell() != a_ref->GetParentCell()) {
+				gather(player->GetParentCell());
+			}
+			std::ranges::sort(refs, {}, &std::pair<float, RE::TESObjectREFR*>::first);
+
+			int used = 0;
+			for (auto& [dist, other] : refs) {
+				if (used >= 12) {
+					break;
+				}
+				const auto before = out.size();
+				CollectRef(other, true, out);
+				if (out.size() != before) {
+					++used;
+				}
+			}
 			return out;
 		}
 
@@ -167,6 +229,9 @@ namespace fv::Screen
 			int best = -1;
 			int bestScore = std::numeric_limits<int>::min();
 			for (int i = 0; i < static_cast<int>(a_candidates.size()); ++i) {
+				if (a_candidates[i].nearby) {
+					continue;  // never jump to a neighbouring object automatically
+				}
 				const int s = Score(a_candidates[i]);
 				if (s > bestScore) {
 					best = i;
@@ -210,7 +275,58 @@ namespace fv::Screen
 		{
 			float u0{ 0 }, v0{ 0 }, u1{ 1 }, v1{ 1 };
 			bool  ok{ false };
+			float aspect{ 0.0f };  // physical width/height of the UV rectangle, 0 = unknown
 		};
+
+		// Fits P = A + u*Du + v*Dv over all vertices; |Du|*(u1-u0) / |Dv|*(v1-v0) is the screen's shape.
+		float SolveAspect(const std::vector<std::array<double, 5>>& a_pts, const UVBounds& a_uv)
+		{
+			double n = 0, su = 0, sv = 0, suu = 0, suv = 0, svv = 0;
+			double b[3][3]{};  // [coord][1,u,v]
+			for (const auto& p : a_pts) {
+				const double u = p[3], v = p[4];
+				n += 1;
+				su += u;
+				sv += v;
+				suu += u * u;
+				suv += u * v;
+				svv += v * v;
+				for (int c = 0; c < 3; ++c) {
+					b[c][0] += p[c];
+					b[c][1] += u * p[c];
+					b[c][2] += v * p[c];
+				}
+			}
+			const double m[3][3]{ { n, su, sv }, { su, suu, suv }, { sv, suv, svv } };
+			const double det = m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) +
+			                   m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+			if (std::abs(det) < 1e-12) {
+				return 0.0f;
+			}
+			double inv[3][3];
+			inv[0][0] = (m[1][1] * m[2][2] - m[1][2] * m[2][1]) / det;
+			inv[0][1] = (m[0][2] * m[2][1] - m[0][1] * m[2][2]) / det;
+			inv[0][2] = (m[0][1] * m[1][2] - m[0][2] * m[1][1]) / det;
+			inv[1][0] = (m[1][2] * m[2][0] - m[1][0] * m[2][2]) / det;
+			inv[1][1] = (m[0][0] * m[2][2] - m[0][2] * m[2][0]) / det;
+			inv[1][2] = (m[0][2] * m[1][0] - m[0][0] * m[1][2]) / det;
+			inv[2][0] = (m[1][0] * m[2][1] - m[1][1] * m[2][0]) / det;
+			inv[2][1] = (m[0][1] * m[2][0] - m[0][0] * m[2][1]) / det;
+			inv[2][2] = (m[0][0] * m[1][1] - m[0][1] * m[1][0]) / det;
+
+			double du[3], dv[3];
+			for (int c = 0; c < 3; ++c) {
+				du[c] = inv[1][0] * b[c][0] + inv[1][1] * b[c][1] + inv[1][2] * b[c][2];
+				dv[c] = inv[2][0] * b[c][0] + inv[2][1] * b[c][1] + inv[2][2] * b[c][2];
+			}
+			const double width = std::sqrt(du[0] * du[0] + du[1] * du[1] + du[2] * du[2]) * (a_uv.u1 - a_uv.u0);
+			const double height = std::sqrt(dv[0] * dv[0] + dv[1] * dv[1] + dv[2] * dv[2]) * (a_uv.v1 - a_uv.v0);
+			if (width <= 1e-6 || height <= 1e-6) {
+				return 0.0f;
+			}
+			const double aspect = width / height;
+			return aspect > 0.15 && aspect < 7.0 ? static_cast<float>(aspect) : 0.0f;
+		}
 
 		UVBounds ReadUVBounds(RE::BSGeometry* a_geom)
 		{
@@ -230,15 +346,19 @@ namespace fv::Screen
 			const std::uint32_t stride = desc.GetSize();
 			const std::uint32_t offset = desc.GetAttributeOffset(RE::BSGraphics::Vertex::Attribute::VA_TEXCOORD0);
 			const std::uint32_t count = tri->numVertices;
-			if (stride == 0 || offset + 4 > stride || count == 0) {
+			const bool          fullPrecision = desc.HasFlag(RE::BSGraphics::Vertex::Flags::VF_FULLPREC);
+			if (stride == 0 || offset + 4 > stride || count == 0 || (fullPrecision ? 12u : 6u) > stride) {
 				return out;
 			}
 
-			const auto* data = static_cast<const std::uint8_t*>(shape->vertexBuffer->data);
-			float       u0 = FLT_MAX, v0 = FLT_MAX, u1 = -FLT_MAX, v1 = -FLT_MAX;
+			const auto*                        data = static_cast<const std::uint8_t*>(shape->vertexBuffer->data);
+			float                              u0 = FLT_MAX, v0 = FLT_MAX, u1 = -FLT_MAX, v1 = -FLT_MAX;
+			std::vector<std::array<double, 5>> points;
+			points.reserve(count);
 			for (std::uint32_t i = 0; i < count; ++i) {
+				const auto*   vert = data + static_cast<std::size_t>(i) * stride;
 				std::uint16_t h[2];
-				std::memcpy(h, data + static_cast<std::size_t>(i) * stride + offset, sizeof(h));
+				std::memcpy(h, vert + offset, sizeof(h));
 				const float u = HalfToFloat(h[0]);
 				const float v = HalfToFloat(h[1]);
 				if (!std::isfinite(u) || !std::isfinite(v)) {
@@ -248,11 +368,24 @@ namespace fv::Screen
 				u1 = std::max(u1, u);
 				v0 = std::min(v0, v);
 				v1 = std::max(v1, v);
+
+				float pos[3];
+				if (fullPrecision) {
+					std::memcpy(pos, vert, sizeof(pos));
+				} else {
+					std::uint16_t hp[3];
+					std::memcpy(hp, vert, sizeof(hp));
+					for (int c = 0; c < 3; ++c) {
+						pos[c] = HalfToFloat(hp[c]);
+					}
+				}
+				points.push_back({ pos[0], pos[1], pos[2], u, v });
 			}
 			if (u1 - u0 < 1e-4f || v1 - v0 < 1e-4f || std::abs(u0) > 1000.f || std::abs(v1) > 1000.f) {
 				return out;
 			}
 			out = { u0, v0, u1, v1, true };
+			out.aspect = SolveAspect(points, out);
 			return out;
 		}
 
@@ -423,16 +556,28 @@ namespace fv::Screen
 		if (value.empty()) {
 			return choice;
 		}
-		// index|name|flip
-		const auto p1 = value.find('|');
-		const auto p2 = p1 == std::string::npos ? std::string::npos : value.find('|', p1 + 1);
-		try {
-			choice.index = std::stoi(value.substr(0, p1));
-			if (p1 != std::string::npos) {
-				choice.name = value.substr(p1 + 1, p2 == std::string::npos ? std::string::npos : p2 - p1 - 1);
+		// index|name|flip|owner   (owner = "plugin.esp/0001234" of a nearby object, or empty)
+		std::vector<std::string> parts;
+		std::size_t              start = 0;
+		while (true) {
+			const auto bar = value.find('|', start);
+			parts.push_back(value.substr(start, bar == std::string::npos ? std::string::npos : bar - start));
+			if (bar == std::string::npos) {
+				break;
 			}
-			if (p2 != std::string::npos) {
-				choice.flip = std::stoi(value.substr(p2 + 1)) & 3;
+			start = bar + 1;
+		}
+		try {
+			choice.index = std::stoi(parts[0]);
+			if (parts.size() > 1) {
+				choice.name = parts[1];
+			}
+			if (parts.size() > 2 && !parts[2].empty()) {
+				choice.flip = std::stoi(parts[2]) & 3;
+			}
+			if (parts.size() > 3) {
+				choice.owner = parts[3];
+				std::ranges::replace(choice.owner, '/', '|');
 			}
 		} catch (...) {
 			return {};
@@ -446,15 +591,16 @@ namespace fv::Screen
 		if (key.empty()) {
 			return;
 		}
-		const auto value = std::format("{}|{}|{}", a_choice.index, a_choice.name, a_choice.flip);
+		auto owner = a_choice.owner;
+		std::ranges::replace(owner, '|', '/');
+		const auto value = std::format("{}|{}|{}|{}", a_choice.index, a_choice.name, a_choice.flip, owner);
 		::WritePrivateProfileStringA("Screens", key.c_str(), value.c_str(), kChoiceIni);
 		log::info("saved screen choice for {}: {}", key, value);
 	}
 
 	int CountCandidates(RE::TESObjectREFR* a_ref)
 	{
-		auto* root = a_ref ? a_ref->Get3D() : nullptr;
-		return root ? static_cast<int>(Candidates(root).size()) : 0;
+		return static_cast<int>(Candidates(a_ref, true).size());
 	}
 
 	bool Bind(RE::TESObjectREFR* a_ref, RE::NiTexture* a_slotTexture, ScreenBinding& a_binding, int a_forceIndex)
@@ -468,7 +614,7 @@ namespace fv::Screen
 			return false;
 		}
 
-		const auto candidates = Candidates(root);
+		const auto candidates = Candidates(a_ref, true);
 		if (candidates.empty()) {
 			log::warn("{}: no textured meshes found", RefName(a_ref));
 			return false;
@@ -481,11 +627,14 @@ namespace fv::Screen
 		if (a_forceIndex >= 0) {
 			index = a_forceIndex % count;
 		} else if (saved.index >= 0) {
-			if (saved.index < count && candidates[saved.index].name == saved.name) {
+			auto matches = [&](int i) {
+				return candidates[i].name == saved.name && (saved.owner.empty() || candidates[i].ownerKey == saved.owner);
+			};
+			if (saved.index < count && matches(saved.index)) {
 				index = saved.index;
 			} else {
 				for (int i = 0; i < count; ++i) {
-					if (candidates[i].name == saved.name) {
+					if (matches(i)) {
 						index = i;
 						break;
 					}
@@ -494,6 +643,9 @@ namespace fv::Screen
 		}
 		if (index < 0 && !settings.forceNode.empty()) {
 			for (int i = 0; i < count; ++i) {
+				if (candidates[i].nearby) {
+					continue;
+				}
 				if (_stricmp(candidates[i].name.c_str(), settings.forceNode.c_str()) == 0) {
 					index = i;
 					break;
@@ -583,7 +735,11 @@ namespace fv::Screen
 			}
 		}
 
-		a_binding.root = RE::NiPointer<RE::NiAVObject>(root);
+		a_binding.owner = candidates[index].owner->GetHandle();
+		a_binding.ownerKey = candidates[index].ownerKey;
+		a_binding.ownerIsNearby = candidates[index].nearby;
+		a_binding.root = RE::NiPointer<RE::NiAVObject>(candidates[index].root);
+		a_binding.screenAspect = uv.ok ? uv.aspect : ReadUVBounds(geom).aspect;
 		a_binding.geometry = RE::NiPointer<RE::BSGeometry>(geom);
 		a_binding.material = mat;
 		a_binding.slotTexture = RE::NiPointer<RE::NiTexture>(a_slotTexture);
@@ -593,11 +749,12 @@ namespace fv::Screen
 		a_binding.geometryName = candidates[index].name;
 		a_binding.bound = true;
 
-		log::info("{}: bound mesh {}/{} '{}' ({} shader{}, texture '{}', sRGB={}, uv {} [{:.3f},{:.3f}]-[{:.3f},{:.3f}], flip {}, controllers {})",
-			RefName(a_ref), index + 1, count, candidates[index].name, a_binding.isEffect ? "effect" : "lighting",
+		log::info("{}: bound mesh {}/{} '{}'{} ({} shader{}, texture '{}', sRGB={}, uv {} [{:.3f},{:.3f}]-[{:.3f},{:.3f}], aspect {:.2f}, flip {}, controllers {})",
+			RefName(a_ref), index + 1, count, candidates[index].name,
+			candidates[index].nearby ? std::format(" of nearby {}", RefName(candidates[index].owner)) : std::string(), a_binding.isEffect ? "effect" : "lighting",
 			a_binding.hadGlow ? " + glowmap" : "",
 			a_binding.originalBase ? std::string(a_binding.originalBase->GetName()) : std::string("<none>"), a_binding.originalWasSRGB,
-			settings.fitUV ? (uv.ok ? "fit" : "unread") : "untouched", uv.u0, uv.v0, uv.u1, uv.v1, flip,
+			settings.fitUV ? (uv.ok ? "fit" : "unread") : "untouched", uv.u0, uv.v0, uv.u1, uv.v1, a_binding.screenAspect, flip,
 			a_binding.savedControllers ? "stopped" : "none");
 		return true;
 	}
@@ -639,9 +796,14 @@ namespace fv::Screen
 		a_binding = {};
 	}
 
-	bool StillValid(const ScreenBinding& a_binding, RE::NiAVObject* a_currentRoot)
+	bool StillValid(const ScreenBinding& a_binding)
 	{
-		if (!a_binding.bound || a_binding.root.get() != a_currentRoot || !a_currentRoot) {
+		if (!a_binding.bound) {
+			return false;
+		}
+		auto owner = a_binding.owner.get();
+		auto* a_currentRoot = owner ? owner->Get3D() : nullptr;
+		if (!a_currentRoot || a_binding.root.get() != a_currentRoot) {
 			return false;
 		}
 		auto* geom = a_binding.geometry.get();
@@ -690,17 +852,17 @@ namespace fv::Screen
 			return;
 		}
 
-		const auto candidates = Candidates(root);
+		const auto candidates = Candidates(a_ref, true);
 		const int  best = BestCandidate(candidates);
 		for (int i = 0; i < static_cast<int>(candidates.size()); ++i) {
 			const auto& c = candidates[i];
 			auto*       prop = GetShaderProperty(c.geom);
 			auto*       mat = prop->material;
 			const auto  uv = ReadUVBounds(c.geom);
-			log::info("  [{}]{} '{}' path='{}' shader={} score={} tex='{}' meshUV={} [{:.3f},{:.3f}]-[{:.3f},{:.3f}] matUV off=({:.2f},{:.2f}) scale=({:.2f},{:.2f}) controllers={}",
-				i + 1, i == best ? " <== auto pick" : "", c.name, c.pathLower,
+			log::info("  [{}]{}{} '{}' path='{}' shader={} score={} tex='{}' meshUV={} [{:.3f},{:.3f}]-[{:.3f},{:.3f}] aspect={:.2f} matUV off=({:.2f},{:.2f}) scale=({:.2f},{:.2f}) controllers={}",
+				i + 1, i == best ? " <== auto pick" : "", c.nearby ? std::format(" (nearby {} {})", RefName(c.owner), c.ownerKey) : std::string(), c.name, c.pathLower,
 				mat->GetType() == RE::BSShaderMaterial::Type::kEffect ? "effect" : std::format("lighting/{}", static_cast<int>(mat->GetFeature())),
-				Score(c), BaseTextureName(prop), uv.ok ? "ok" : "n/a", uv.u0, uv.v0, uv.u1, uv.v1,
+				Score(c), BaseTextureName(prop), uv.ok ? "ok" : "n/a", uv.u0, uv.v0, uv.u1, uv.v1, uv.aspect,
 				mat->texCoordOffset[0].x, mat->texCoordOffset[0].y, mat->texCoordScale[0].x, mat->texCoordScale[0].y,
 				prop->controllers ? "yes" : "no");
 		}

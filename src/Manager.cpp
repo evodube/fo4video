@@ -91,6 +91,30 @@ namespace fv
 		}
 	}
 
+	namespace
+	{
+		// Texture size that holds a w x h frame at the screen's aspect ratio (black bars instead of stretching).
+		std::pair<std::uint32_t, std::uint32_t> FittedSize(std::uint32_t a_w, std::uint32_t a_h, float a_screenAspect)
+		{
+			if (Settings::Get().aspectMode == 0 || a_screenAspect <= 0.0f || a_w == 0 || a_h == 0) {
+				return { a_w, a_h };
+			}
+			const float video = static_cast<float>(a_w) / static_cast<float>(a_h);
+			if (std::abs(video / a_screenAspect - 1.0f) < 0.03f) {
+				return { a_w, a_h };
+			}
+			std::uint32_t w = a_w, h = a_h;
+			if (video > a_screenAspect) {
+				h = static_cast<std::uint32_t>(std::lround(a_w / a_screenAspect));
+			} else {
+				w = static_cast<std::uint32_t>(std::lround(a_h * a_screenAspect));
+			}
+			w = std::min<std::uint32_t>((w + 1) & ~1u, 8192);
+			h = std::min<std::uint32_t>((h + 1) & ~1u, 8192);
+			return { std::max(w, a_w), std::max(h, a_h) };
+		}
+	}
+
 	// ---------------- Slot ----------------
 
 	bool Slot::Ensure(ID3D11Device* a_device, std::uint32_t a_width, std::uint32_t a_height, bool a_srgb)
@@ -131,9 +155,11 @@ namespace fv
 		return true;
 	}
 
+	// Copies a frame into the slot texture, centred, with black bars filling any extra space
+	// (the texture is sized to the screen's shape when keeping the aspect ratio).
 	void Slot::Upload(ID3D11DeviceContext* a_context, const std::uint8_t* a_pixels, std::uint32_t a_width, std::uint32_t a_height)
 	{
-		if (!texture || a_width != width || a_height != height) {
+		if (!texture || a_width > width || a_height > height) {
 			return;
 		}
 		D3D11_MAPPED_SUBRESOURCE mapped{};
@@ -141,12 +167,25 @@ namespace fv
 			return;
 		}
 		const std::size_t rowBytes = static_cast<std::size_t>(a_width) * 4;
+		const std::size_t texRowBytes = static_cast<std::size_t>(width) * 4;
+		const std::uint32_t offX = (width - a_width) / 2;
+		const std::uint32_t offY = (height - a_height) / 2;
 		auto*             dst = static_cast<std::uint8_t*>(mapped.pData);
-		if (mapped.RowPitch == rowBytes) {
+
+		if (offX == 0 && offY == 0 && mapped.RowPitch == rowBytes) {
 			std::memcpy(dst, a_pixels, rowBytes * a_height);
 		} else {
-			for (std::uint32_t y = 0; y < a_height; ++y) {
-				std::memcpy(dst + static_cast<std::size_t>(y) * mapped.RowPitch, a_pixels + y * rowBytes, rowBytes);
+			for (std::uint32_t y = 0; y < height; ++y) {
+				auto* row = dst + static_cast<std::size_t>(y) * mapped.RowPitch;
+				if (y < offY || y >= offY + a_height) {
+					std::memset(row, 0, texRowBytes);
+					continue;
+				}
+				if (offX) {
+					std::memset(row, 0, static_cast<std::size_t>(offX) * 4);
+					std::memset(row + (static_cast<std::size_t>(offX) + a_width) * 4, 0, texRowBytes - (static_cast<std::size_t>(offX) + a_width) * 4);
+				}
+				std::memcpy(row + static_cast<std::size_t>(offX) * 4, a_pixels + static_cast<std::size_t>(y - offY) * rowBytes, rowBytes);
 			}
 		}
 		a_context->Unmap(texture.Get(), 0);
@@ -350,6 +389,7 @@ namespace fv
 			return false;
 		}
 		player->srgb = player->binding.originalWasSRGB;
+		player->screenAspect = player->binding.screenAspect;
 
 		Player* raw = player.get();
 		{
@@ -447,7 +487,7 @@ namespace fv
 			}
 
 			auto* root = ref->Get3D();
-			const bool valid = Screen::StillValid(p->binding, root);
+			const bool valid = Screen::StillValid(p->binding);
 			if (!valid) {
 				// 3D unloaded/rebuilt, screen part re-attached (projector screens), or another mod swapped
 				// the material: rebind. When unbound, retry about once a second.
@@ -460,6 +500,7 @@ namespace fv
 					if (root && _slots[p->slot].niTexture) {
 						if (Screen::Bind(ref.get(), _slots[p->slot].niTexture.get(), p->binding)) {
 							p->srgb = p->binding.originalWasSRGB;
+							p->screenAspect = p->binding.screenAspect;
 						}
 					}
 					p->rebindCooldown = 6;
@@ -598,13 +639,16 @@ namespace fv
 				const int index = ((b.bound ? b.candidateIndex : -1) + (a_flip ? 0 : 1) + count) % count;
 				const int flip = a_flip ? (b.flip + 1) % 4 : b.flip;
 
-				Screen::SaveChoice(ref.get(), { index, {}, flip });
+				Screen::SaveChoice(ref.get(), { index, {}, flip, {} });
 				Screen::Unbind(b);
 				if (Screen::Bind(ref.get(), _slots[player->slot].niTexture.get(), b, std::max(index, 0))) {
 					player->srgb = b.originalWasSRGB;
-					Screen::SaveChoice(ref.get(), { b.candidateIndex, b.geometryName, b.flip });
+					player->screenAspect = b.screenAspect;
+					Screen::SaveChoice(ref.get(), { b.candidateIndex, b.geometryName, b.flip, b.ownerIsNearby ? b.ownerKey : std::string() });
 					static constexpr std::array<const char*, 4> flips{ "normal", "flipped vertically", "mirrored", "rotated 180" };
-					message = std::format("Real Videos: mesh {}/{} '{}', {}", b.candidateIndex + 1, b.candidateCount, b.geometryName, flips[b.flip & 3]);
+					auto owner = b.owner.get();
+					message = std::format("Real Videos: mesh {}/{} '{}'{}, {}", b.candidateIndex + 1, b.candidateCount, b.geometryName,
+						b.ownerIsNearby ? std::format(" on nearby {}", Screen::RefName(owner.get())) : std::string(), flips[b.flip & 3]);
 				} else {
 					message = "Real Videos: could not use that mesh";
 				}
@@ -694,7 +738,8 @@ namespace fv
 			if (p.kind == SourceKind::kTestPattern) {
 				if (!paused || p.pattern.empty()) {
 					MakePattern(p.pattern, kPatternSize, kPatternSize, seconds);
-					if (slot.Ensure(a_device, kPatternSize, kPatternSize, srgb)) {
+					const auto [tw, th] = FittedSize(kPatternSize, kPatternSize, p.screenAspect);
+					if (slot.Ensure(a_device, tw, th, srgb)) {
 						slot.Upload(a_context, p.pattern.data(), kPatternSize, kPatternSize);
 						++p.framesShown;
 					}
@@ -707,7 +752,8 @@ namespace fv
 				}
 				VideoFrame frame;
 				if (p.media->AcquireFrame(p.media->Clock(), frame)) {
-					if (slot.Ensure(a_device, frame.width, frame.height, srgb)) {
+					const auto [tw, th] = FittedSize(frame.width, frame.height, p.screenAspect);
+					if (slot.Ensure(a_device, tw, th, srgb)) {
 						slot.Upload(a_context, frame.pixels.data(), frame.width, frame.height);
 						if (p.framesShown++ == 0) {
 							log::info("{}: first video frame on screen ({}x{})", p.name, frame.width, frame.height);

@@ -143,9 +143,29 @@ namespace fv
 			_stride = stride;
 		}
 
+		// decoders pad the height (1080 -> 1088); only show the real picture area
+		std::uint32_t cropX = 0, cropY = 0, showW = w, showH = h;
+		MFVideoArea   area{};
+		if (SUCCEEDED(cur->GetBlob(MF_MT_MINIMUM_DISPLAY_APERTURE, reinterpret_cast<UINT8*>(&area), sizeof(area), nullptr))) {
+			const auto ax = static_cast<std::uint32_t>(std::max<LONG>(area.OffsetX.value, 0));
+			const auto ay = static_cast<std::uint32_t>(std::max<LONG>(area.OffsetY.value, 0));
+			const auto aw = static_cast<std::uint32_t>(std::max<LONG>(area.Area.cx, 0));
+			const auto ah = static_cast<std::uint32_t>(std::max<LONG>(area.Area.cy, 0));
+			if (aw > 0 && ah > 0 && ax + aw <= w && ay + ah <= h) {
+				cropX = ax;
+				cropY = ay;
+				showW = aw;
+				showH = ah;
+			}
+		}
+
 		std::scoped_lock lock(_frameLock);
-		_width = w;
-		_height = h;
+		_frameWidth = w;
+		_frameHeight = h;
+		_cropX = cropX;
+		_cropY = cropY;
+		_width = showW;
+		_height = showH;
 		return true;
 	}
 
@@ -404,12 +424,15 @@ namespace fv
 				continue;
 			}
 
-			std::uint32_t w, h;
+			std::uint32_t w, h, frameH, cropX, cropY;
 			LONG          defaultStride;
 			{
 				std::scoped_lock lock(_frameLock);
 				w = _width;
 				h = _height;
+				frameH = _frameHeight;
+				cropX = _cropX;
+				cropY = _cropY;
 				defaultStride = _stride;
 			}
 
@@ -425,11 +448,11 @@ namespace fv
 			} else if (SUCCEEDED(buffer->Lock(&base, nullptr, &length))) {
 				pitch = defaultStride;
 				const auto absPitch = static_cast<std::size_t>(pitch < 0 ? -pitch : pitch);
-				if (length < absPitch * h) {
+				if (length < absPitch * frameH) {
 					buffer->Unlock();
 					continue;
 				}
-				scan0 = pitch < 0 ? base + absPitch * (h - 1) : base;
+				scan0 = pitch < 0 ? base + absPitch * (frameH - 1) : base;
 			} else {
 				continue;
 			}
@@ -449,7 +472,7 @@ namespace fv
 
 			const std::size_t rowBytes = static_cast<std::size_t>(w) * 4;
 			for (std::uint32_t y = 0; y < h; ++y) {
-				std::memcpy(frame.pixels.data() + y * rowBytes, scan0 + static_cast<std::ptrdiff_t>(y) * pitch, rowBytes);
+				std::memcpy(frame.pixels.data() + y * rowBytes, scan0 + static_cast<std::ptrdiff_t>(y + cropY) * pitch + cropX * 4, rowBytes);
 			}
 
 			if (locked2D) {

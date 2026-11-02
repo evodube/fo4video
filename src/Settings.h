@@ -23,6 +23,8 @@ namespace fv
 		int                      srgb{ -1 };  // -1 auto (match original texture), 0 linear, 1 sRGB
 		bool                     fitUV{ true };
 		bool                     stopScreenAnimation{ true };
+		int                      aspectMode{ 1 };            // 0 = stretch, 1 = keep aspect (black bars)
+		float                    nearbyRadius{ 2500.0f };    // F7 also offers meshes of objects this close
 		float                    brightness{ 1.0f };
 		std::string              placeholderPrefix;  // empty = try "Textures\\" then ""
 

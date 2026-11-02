@@ -61,6 +61,10 @@ namespace fv
 		std::uint32_t           _width{ 0 };
 		std::uint32_t           _height{ 0 };
 		LONG                    _stride{ 0 };
+		std::uint32_t           _frameWidth{ 0 };   // decoded buffer size
+		std::uint32_t           _frameHeight{ 0 };
+		std::uint32_t           _cropX{ 0 };        // visible picture inside it
+		std::uint32_t           _cropY{ 0 };
 		std::int64_t            _duration{ 0 };
 
 		mutable std::mutex      _frameLock;

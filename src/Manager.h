@@ -50,6 +50,7 @@ namespace fv
 
 		ScreenBinding      binding;  // main thread only
 		std::atomic<bool>  srgb{ false };
+		std::atomic<float> screenAspect{ 0.0f };
 		std::atomic<float> volume{ 0.0f };
 		float              userVolume{ 1.0f };
 		std::atomic<bool>  stopping{ false };
