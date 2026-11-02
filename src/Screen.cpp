@@ -163,6 +163,43 @@ namespace fv::Screen
 
 		constexpr int kScreenLike = 20;  // score a nearby mesh needs to be offered as a screen
 
+		// Every loaded cell (the interior, or the loaded exterior grid). Objects that belong together (Rebuild's
+		// drive-in screen, projector and film) can sit in different exterior cells.
+		template <class F>
+		void ForEachLoadedCell(F&& a_fn)
+		{
+			auto* tes = RE::TES::GetSingleton();
+			if (!tes) {
+				return;
+			}
+			if (tes->interiorCell) {
+				a_fn(tes->interiorCell);
+				return;
+			}
+			if (auto* grid = tes->gridCells) {
+				const auto dim = std::min<std::uint32_t>(grid->dimension, 15);
+				for (std::uint32_t x = 0; x < dim; ++x) {
+					for (std::uint32_t y = 0; y < dim; ++y) {
+						auto* gc = grid->Get(x, y);
+						if (gc && gc->cell && gc->cell->IsAttached()) {
+							a_fn(gc->cell);
+						}
+					}
+				}
+			}
+		}
+
+		// Drawn at all: neither the mesh nor any node above it is switched off.
+		bool IsShown(RE::NiAVObject* a_obj)
+		{
+			for (int depth = 0; a_obj && depth < 64; a_obj = a_obj->parent, ++depth) {
+				if (a_obj->GetAppCulled()) {
+					return false;
+				}
+			}
+			return true;
+		}
+
 		// The selected object's meshes first, then screen-like meshes of objects around it, nearest first
 		// (a projector's screen, or a drive-in screen that can't be clicked in the console).
 		std::vector<Candidate> Candidates(RE::TESObjectREFR* a_ref, bool a_includeNearby)
@@ -193,6 +230,7 @@ namespace fv::Screen
 			if (auto* player = RE::PlayerCharacter::GetSingleton(); player && player->GetParentCell() != a_ref->GetParentCell()) {
 				gather(player->GetParentCell());
 			}
+			ForEachLoadedCell(gather);
 			std::ranges::sort(refs, {}, &std::pair<float, RE::TESObjectREFR*>::first);
 
 			int used = 0;
@@ -1018,85 +1056,103 @@ namespace fv::Screen
 			a_obj->SetAppCulled(true);
 		}
 
-		// Film layers of other objects drawn over our screen: the drive-in movie stills (Far Harbor's film,
-		// Rebuild's film object) that a projector script enables when it's switched on. The projector's light
-		// beam and sound are left alone.
+		// A drive-in film layer: the movie stills a projector shows on the screen (Far Harbor's film, Rebuild's
+		// film object).
+		bool IsFilmStill(RE::BSGeometry* a_geom)
+		{
+			const auto tex = Lower(BaseTextureName(GetShaderProperty(a_geom)));
+			return ContainsAny(tex, { "moviefx", "moviestill", "drivein\\effects", "drivein/effects" });
+		}
+
+		struct FilmLayer
+		{
+			RE::TESObjectREFR* ref{ nullptr };
+			RE::BSGeometry*    geom{ nullptr };
+			std::string        name;
+			std::string        pathLower;
+		};
+
+		// Refs with 3D within a_radius of a_center, in every loaded cell.
+		std::vector<RE::TESObjectREFR*> RefsAround(const RE::NiPoint3& a_center, float a_radius)
+		{
+			std::vector<RE::TESObjectREFR*> refs;
+			ForEachLoadedCell([&](RE::TESObjectCELL* a_cell) {
+				a_cell->ForEachReferenceInRange(a_center, a_radius, [&](RE::TESObjectREFR* a_other) {
+					if (a_other && !a_other->IsActor() && !a_other->IsDisabled() && a_other->Get3D() && std::ranges::find(refs, a_other) == refs.end()) {
+						refs.push_back(a_other);
+					}
+					return RE::BSContainer::ForEachResult::kContinue;
+				});
+			});
+			return refs;
+		}
+
+		// The film a switched-on projector is showing over this screen: a visible movie-still layer whose object
+		// sits on the screen. Empty when the projector is off.
+		FilmLayer FindShownFilm(RE::BSGeometry* a_screen)
+		{
+			if (!a_screen || a_screen->worldBound.fRadius <= 0.0f) {
+				return {};
+			}
+			const auto& mine = a_screen->worldBound;
+			FilmLayer   best;
+			float       bestDist = FLT_MAX;
+			for (auto* ref : RefsAround(mine.center, std::max(mine.fRadius * 3.0f, 3000.0f))) {
+				const float refDist = mine.center.GetDistance(ref->GetPosition());
+				if (refDist > mine.fRadius * 2.0f + 2000.0f) {
+					continue;
+				}
+				std::vector<Candidate> layers;
+				Collect(ref->Get3D(), {}, layers);
+				for (auto& c : layers) {
+					if (c.geom != a_screen && IsFilmStill(c.geom) && IsShown(c.geom)) {
+						// the film lying on this screen, not another one further off
+						const float d = mine.center.GetDistance(c.geom->worldBound.center);
+						if (d < bestDist && d <= mine.fRadius * 1.5f + c.geom->worldBound.fRadius) {
+							best = { ref, c.geom, c.name, c.pathLower };
+							bestDist = d;
+						}
+					}
+				}
+			}
+			return best;
+		}
+
+		// Bound to a film: hide its other stills (and any other film over the same screen) so only the video shows.
+		// Bound to a plain screen: notice when a projector switches its film on over it, so we move onto the film.
+		// The projector's light beam and sound are left alone either way.
 		void ScanFilmLayers(ScreenBinding& a_binding)
 		{
 			auto* geom = a_binding.geometry.get();
 			if (!geom || geom->worldBound.fRadius <= 0.0f) {
 				return;
 			}
+			if (!a_binding.onFilm) {
+				if (auto film = FindShownFilm(geom); film.geom) {
+					log::info("'{}': a projector is showing '{}' of {} over this screen; moving the video onto it", a_binding.geometryName, film.name,
+						RefName(film.ref));
+					a_binding.filmAppeared = true;
+				}
+				return;
+			}
+
 			const auto& mine = geom->worldBound;
-			const float radius = std::max(mine.fRadius * 3.0f, 3000.0f);
-
-			std::vector<RE::TESObjectREFR*> refs;
-			auto gather = [&](RE::TESObjectCELL* a_cell) {
-				if (!a_cell) {
-					return;
-				}
-				a_cell->ForEachReferenceInRange(mine.center, radius, [&](RE::TESObjectREFR* a_other) {
-					if (a_other && !a_other->IsActor() && !a_other->IsDisabled() && a_other->Get3D() && std::ranges::find(refs, a_other) == refs.end()) {
-						refs.push_back(a_other);
-					}
-					return RE::BSContainer::ForEachResult::kContinue;
-				});
-			};
-			auto owner = a_binding.owner.get();
-			gather(owner ? owner->GetParentCell() : nullptr);
-			if (auto* player = RE::PlayerCharacter::GetSingleton(); player && (!owner || player->GetParentCell() != owner->GetParentCell())) {
-				gather(player->GetParentCell());
-			}
-			// the film can live in a neighbouring cell (Rebuild's drive-in: screen and projector are in different
-			// cells), so look through every loaded cell
-			if (auto* tes = RE::TES::GetSingleton()) {
-				if (tes->interiorCell) {
-					gather(tes->interiorCell);
-				} else if (auto* grid = tes->gridCells) {
-					const auto dim = std::min<std::uint32_t>(grid->dimension, 15);
-					for (std::uint32_t x = 0; x < dim; ++x) {
-						for (std::uint32_t y = 0; y < dim; ++y) {
-							auto* gc = grid->Get(x, y);
-							if (gc && gc->cell && gc->cell->IsAttached()) {
-								gather(gc->cell);
-							}
-						}
-					}
-				}
-			}
-
-			const auto before = a_binding.hiddenLayers.size();
-			for (auto* ref : refs) {
+			const auto  before = a_binding.hiddenLayers.size();
+			for (auto* ref : RefsAround(mine.center, std::max(mine.fRadius * 3.0f, 3000.0f))) {
 				std::vector<Candidate> layers;
 				Collect(ref->Get3D(), {}, layers);
 				const float refDist = mine.center.GetDistance(ref->GetPosition());
 				for (auto& c : layers) {
-					if (c.geom == geom) {
-						continue;
-					}
-					auto*      prop = GetShaderProperty(c.geom);
-					const bool effect = prop && prop->material && prop->material->GetType() == RE::BSShaderMaterial::Type::kEffect;
-					const auto tex = Lower(BaseTextureName(prop));
-					const auto name = Lower(c.name);
-					if (ContainsAny(name, { "beam", "light", "flare", "ray" }) || ContainsAny(tex, { "beam", "flare", "lightray" })) {
-						continue;  // the projector's light stays
-					}
-					// movie stills are only ever the film: hide them if their object is anywhere isNear the screen
-					// (a layer that is switched off has no up-to-date bounds, so go by the object's position)
-					const bool stills = ContainsAny(tex, { "moviefx", "moviestill", "drivein\\effects", "drivein/effects" });
-					const bool filmish = effect && (ContainsAny(tex, { "movie", "film" }) || ContainsAny(name, { "texholder", "movie", "film" }) ||
-					                               ContainsAny(c.pathLower, { "movie" }));
-					if (!stills && !filmish) {
+					if (c.geom == geom || !IsFilmStill(c.geom)) {
 						continue;
 					}
 					const auto& theirs = c.geom->worldBound;
 					const float boundDist = mine.center.GetDistance(theirs.center);
-					const bool  isNear = stills ? (refDist <= mine.fRadius * 2.0f + 2000.0f || boundDist <= mine.fRadius * 2.0f + theirs.fRadius)
-					                          : boundDist <= std::max(mine.fRadius, theirs.fRadius) * 1.5f;
+					const bool  isNear = refDist <= mine.fRadius * 2.0f + 2000.0f || boundDist <= mine.fRadius * 2.0f + theirs.fRadius;
 					if (std::ranges::find(a_binding.filmLogged, c.geom) == a_binding.filmLogged.end()) {
 						a_binding.filmLogged.push_back(c.geom);
-						log::info("  film layer '{}' of {} tex '{}': object {:.0f} / bounds {:.0f} away (screen radius {:.0f}) -> {}", c.name, RefName(ref), tex,
-							refDist, boundDist, mine.fRadius, isNear ? "hide" : "too far, keep");
+						log::info("  film layer '{}' of {}: object {:.0f} / bounds {:.0f} away (screen radius {:.0f}) -> {}", c.name, RefName(ref), refDist,
+							boundDist, mine.fRadius, isNear ? "hide" : "too far, keep");
 					}
 					if (isNear) {
 						HideLayer(a_binding, c.geom);
@@ -1104,7 +1160,7 @@ namespace fv::Screen
 				}
 			}
 			if (a_binding.hiddenLayers.size() > before) {
-				log::info("'{}': hid {} film layer(s) drawn over the screen", a_binding.geometryName, a_binding.hiddenLayers.size() - before);
+				log::info("'{}': hid {} other film layer(s)", a_binding.geometryName, a_binding.hiddenLayers.size() - before);
 			}
 		}
 	}
@@ -1120,7 +1176,7 @@ namespace fv::Screen
 			return false;
 		}
 
-		const auto candidates = Candidates(a_ref, true);
+		auto candidates = Candidates(a_ref, true);
 		if (candidates.empty()) {
 			log::warn("{}: no textured meshes found", RefName(a_ref));
 			return false;
@@ -1185,7 +1241,7 @@ namespace fv::Screen
 				int        best = -1, bestScore = std::numeric_limits<int>::min();
 				for (int i = 0; i < count; ++i) {
 					const auto& c = candidates[i];
-					if (c.nearby && HasVideoHint(c) && origin.GetDistance(c.owner->GetPosition()) < 3000.0f) {
+					if (c.nearby && HasVideoHint(c) && IsShown(c.geom) && origin.GetDistance(c.owner->GetPosition()) < 3000.0f) {
 						const int sc = Score(c);
 						if (sc > bestScore) {
 							best = i;
@@ -1201,7 +1257,7 @@ namespace fv::Screen
 				// a projector (or anything without a screen of its own): use the best screen nearby
 				int best = -1, bestScore = kScreenLike - 1;
 				for (int i = 0; i < count; ++i) {
-					if (candidates[i].nearby) {
+					if (candidates[i].nearby && IsShown(candidates[i].geom)) {
 						// a film/video surface beats a plain screen behind it (Far Harbor's movie over the drive-in screen)
 						const int sc = Score(candidates[i]) + (HasVideoHint(candidates[i]) ? 100 : 0);
 						if (sc > bestScore) {
@@ -1218,6 +1274,18 @@ namespace fv::Screen
 		}
 		if (index < 0) {
 			return false;
+		}
+
+		// A drive-in projector that is switched on shows its film over the screen: play on the film instead (the
+		// projector's light and sound stay). When it's switched off again we come back to the screen.
+		if (a_forceIndex < 0 && settings.hideOverlays && !(IsFilmStill(candidates[index].geom) && IsShown(candidates[index].geom))) {
+			if (auto film = FindShownFilm(candidates[index].geom); film.geom) {
+				auto* filmRoot = film.ref->Get3D();
+				candidates.push_back({ film.geom, film.name, film.pathLower, film.ref, filmRoot, ModelKey(film.ref), film.ref != a_ref });
+				log::info("{}: projector is on, playing on its film '{}' of {} instead of '{}'", RefName(a_ref), film.name, RefName(film.ref),
+					candidates[index].name);
+				index = static_cast<int>(candidates.size()) - 1;
+			}
 		}
 
 		auto* geom = candidates[index].geom;
@@ -1270,7 +1338,11 @@ namespace fv::Screen
 		// whole texture and the mesh's own UVs pick the part that shows. No face detection, bars or hiding.
 		const bool filmSurface = ContainsAny(origTexLower, { "moviefx", "drivein" }) ||
 		                         ContainsAny(Lower(candidates[index].name), { "drivein", "texholder" });
-		a_binding.classic = settings.classicTV && a_binding.isEffect && !candidates[index].nearby && !filmSurface;
+		const bool isTV = std::ranges::any_of(candidates, [](const Candidate& c) {
+			const auto lower = Lower(c.name);
+			return !c.nearby && lower.starts_with("screenanim") && lower.find("noise") == std::string::npos;
+		});
+		a_binding.classic = settings.classicTV && isTV && a_binding.isEffect && !candidates[index].nearby && !filmSurface;
 		const int userFlip = a_forceIndex >= 0 || saved.index >= 0 ? saved.flip : 0;
 		int       flip = userFlip & 3;
 		MeshShape shape{};
@@ -1299,9 +1371,10 @@ namespace fv::Screen
 			// up, and the picture came out upside down
 			// (clean and dirty versions alike): turn it 180 degrees
 			if (origTexLower.find("ceilingprojectorscreen") != std::string::npos && Lower(candidates[index].name).starts_with("ref_attach_node")) {
-				shape.flipHint ^= 3;
-				shape.faceOrient[0] ^= 3;
-				shape.faceOrient[1] ^= 3;
+				shape.flipHint = 3;
+				shape.faceOrient[0] = 3;
+				shape.faceOrient[1] = 3;
+				log::info("{}: controlled ceiling projector screen: turned 180 degrees", RefName(a_ref));
 			}
 			flip = (userFlip ^ shape.flipHint) & 7;
 			const auto inTexture = [](const std::array<float, 4>& r) { return r[0] >= -0.01f && r[1] >= -0.01f && r[2] <= 1.01f && r[3] <= 1.01f; };
@@ -1327,21 +1400,14 @@ namespace fv::Screen
 			}
 			if (shape.faces == 2 && !settings.bothSides) {
 				// the side facing you; remembered for this mesh so Shift+F7 / F7 don't jump to the other side
-				static std::unordered_map<const RE::BSGeometry*, int> lastFront;
 				const auto& n0 = shape.faceNormal[0];
 				const auto& n1 = shape.faceNormal[1];
 				sidesOpposite = n0.x * n1.x + n0.y * n1.y + n0.z * n1.z < -0.3f;
-				// sides that can't be told apart by their normals: the smaller face is the front on every VotW
-				// screen seen so far (Radiation Star, ceiling projector screen)
-				int  front = sidesOpposite ? (facing[1] > facing[0] ? 1 : 0) : 1;
-				auto it = lastFront.find(geom);
-				if (a_forceIndex >= 0 && it != lastFront.end()) {
-					front = it->second;
-				}
-				lastFront[geom] = front;
-				log::info("{}: sides: normals ({:.2f},{:.2f},{:.2f}) / ({:.2f},{:.2f},{:.2f}){}, you are {:.0f} / {:.0f} in front, winding vote {:.3g} -> face {}",
-					RefName(a_ref), n0.x, n0.y, n0.z, n1.x, n1.y, n1.z, sidesOpposite ? "" : " (not opposite: using the smaller face)", facing[0], facing[1],
-					shape.windingVote, front + 1);
+				// the smaller of the two faces is the front on every two-sided screen seen so far (VotW Radiation
+				// Star, ceiling projector screens); where the player stands doesn't matter
+				int front = 1;
+				log::info("{}: sides: normals ({:.2f},{:.2f},{:.2f}) / ({:.2f},{:.2f},{:.2f}), you are {:.0f} / {:.0f} in front -> face {}{}", RefName(a_ref),
+					n0.x, n0.y, n0.z, n1.x, n1.y, n1.z, facing[0], facing[1], (userFlip & 8) ? 1 : 2, (userFlip & 8) ? " (other side picked)" : "");
 				if (userFlip & 8) {
 					front = 1 - front;
 				}
@@ -1405,7 +1471,8 @@ namespace fv::Screen
 
 			// glowing layers drawn over the same spot (a TV's noise/glass overlays, the stills and credits of the
 			// drive-in movie) would cover the video: hide them while we play
-			if (a_binding.isEffect && settings.hideOverlays) {
+			a_binding.onFilm = IsFilmStill(geom);
+			if (a_binding.isEffect && settings.hideOverlays && !a_binding.onFilm) {
 				std::vector<Candidate> layers;
 				Collect(candidates[index].root, {}, layers);
 				const auto& mine = geom->worldBound;
@@ -1445,8 +1512,13 @@ namespace fv::Screen
 		RebuildRenderPasses(prop);
 		a_binding.geometryName = candidates[index].name;
 		a_binding.bound = true;
+		if (a_binding.onFilm) {
+			// the film switches its stills on and off as it runs; keep the one we play on shown
+			a_binding.onFilmWasCulled = geom->GetAppCulled();
+			geom->SetAppCulled(false);
+		}
 		if (!a_binding.classic && settings.hideOverlays) {
-			ScanFilmLayers(a_binding);  // a drive-in film playing over this screen
+			ScanFilmLayers(a_binding);  // on a film: hide its other stills
 		}
 
 		if (a_binding.classic) {
@@ -1520,6 +1592,9 @@ namespace fv::Screen
 				prop->SetFlag(RE::BSShaderProperty::EShaderPropertyFlag::kGrayscaleToPaletteAlpha, had(RE::BSShaderProperty::EShaderPropertyFlag::kGrayscaleToPaletteAlpha));
 			}
 		}
+		if (a_binding.onFilm && a_binding.geometry) {
+			a_binding.geometry->SetAppCulled(a_binding.onFilmWasCulled);
+		}
 		for (std::size_t i = 0; i < a_binding.hiddenLayers.size(); ++i) {
 			if (auto& layer = a_binding.hiddenLayers[i]) {
 				layer->SetAppCulled(i < a_binding.hiddenLayerWasCulled.size() && a_binding.hiddenLayerWasCulled[i]);
@@ -1534,7 +1609,7 @@ namespace fv::Screen
 
 	bool StillValid(const ScreenBinding& a_binding)
 	{
-		if (!a_binding.bound) {
+		if (!a_binding.bound || a_binding.filmAppeared) {
 			return false;
 		}
 		auto owner = a_binding.owner.get();
@@ -1569,6 +1644,9 @@ namespace fv::Screen
 			if (layer && !layer->GetAppCulled()) {
 				layer->SetAppCulled(true);  // the film's own animation switched it back on
 			}
+		}
+		if (a_binding.onFilm && a_binding.geometry && a_binding.geometry->GetAppCulled()) {
+			a_binding.geometry->SetAppCulled(false);
 		}
 		if (a_binding.bound && !a_binding.classic && Settings::Get().hideOverlays && --a_binding.filmScanCooldown <= 0) {
 			a_binding.filmScanCooldown = 12;  // Maintain runs every 10 frames: about every 2 seconds

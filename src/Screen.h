@@ -54,6 +54,9 @@ namespace fv
 		bool                                twoSidedCleared{ false };  // we stopped drawing the back of the sheet
 		int                                 filmScanCooldown{ 0 };
 		std::vector<const RE::NiAVObject*>  filmLogged;  // film layers already written to the log
+		bool                                onFilm{ false };        // playing on a projector's film layer (drive-in)
+		bool                                onFilmWasCulled{ false };  // that layer's own on/off state before we showed it
+		bool                                filmAppeared{ false };  // a projector switched a film on over our screen: rebind
 	};
 
 	namespace Screen

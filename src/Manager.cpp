@@ -585,6 +585,12 @@ namespace fv
 				StopLocked(*p);
 				continue;
 			}
+			if (ref->IsDeleted() || ref->IsDisabled()) {
+				// scrapped or stored in build mode: stop, otherwise the build menu shows it still playing
+				log::info("{} was removed (scrapped/stored/disabled); stopping", p->name);
+				StopLocked(*p);
+				continue;
+			}
 
 			auto* root = ref->Get3D();
 			const bool valid = Screen::StillValid(p->binding);
