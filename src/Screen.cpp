@@ -1064,9 +1064,6 @@ namespace fv::Screen
 			return ContainsAny(tex, { "moviefx", "moviestill", "drivein\\effects", "drivein/effects" });
 		}
 
-		struct FilmLayer
-		{
-			RE::TESObjectREFR* ref{ nullptr };
 			RE::BSGeometry*    geom{ nullptr };
 			std::string        name;
 			std::string        pathLower;
@@ -1087,55 +1084,14 @@ namespace fv::Screen
 			return refs;
 		}
 
-		// The film a switched-on projector is showing over this screen: a visible movie-still layer whose object
-		// sits on the screen. Empty when the projector is off.
-		FilmLayer FindShownFilm(RE::BSGeometry* a_screen)
-		{
-			if (!a_screen || a_screen->worldBound.fRadius <= 0.0f) {
-				return {};
-			}
-			const auto& mine = a_screen->worldBound;
-			FilmLayer   best;
-			float       bestDist = FLT_MAX;
-			for (auto* ref : RefsAround(mine.center, std::max(mine.fRadius * 3.0f, 3000.0f))) {
-				const float refDist = mine.center.GetDistance(ref->GetPosition());
-				if (refDist > mine.fRadius * 2.0f + 2000.0f) {
-					continue;
-				}
-				std::vector<Candidate> layers;
-				Collect(ref->Get3D(), {}, layers);
-				for (auto& c : layers) {
-					if (c.geom != a_screen && IsFilmStill(c.geom) && IsShown(c.geom)) {
-						// the film lying on this screen, not another one further off
-						const float d = mine.center.GetDistance(c.geom->worldBound.center);
-						if (d < bestDist && d <= mine.fRadius * 1.5f + c.geom->worldBound.fRadius) {
-							best = { ref, c.geom, c.name, c.pathLower };
-							bestDist = d;
-						}
-					}
-				}
-			}
-			return best;
-		}
-
-		// Bound to a film: hide its other stills (and any other film over the same screen) so only the video shows.
-		// Bound to a plain screen: notice when a projector switches its film on over it, so we move onto the film.
-		// The projector's light beam and sound are left alone either way.
+		// Hide the drive-in film's stills drawn over the screen we play on (also the ones a projector switches on
+		// later; this runs every couple of seconds). The projector's light beam and sound are left alone.
 		void ScanFilmLayers(ScreenBinding& a_binding)
 		{
 			auto* geom = a_binding.geometry.get();
 			if (!geom || geom->worldBound.fRadius <= 0.0f) {
 				return;
 			}
-			if (!a_binding.onFilm) {
-				if (auto film = FindShownFilm(geom); film.geom) {
-					log::info("'{}': a projector is showing '{}' of {} over this screen; moving the video onto it", a_binding.geometryName, film.name,
-						RefName(film.ref));
-					a_binding.filmAppeared = true;
-				}
-				return;
-			}
-
 			const auto& mine = geom->worldBound;
 			const auto  before = a_binding.hiddenLayers.size();
 			for (auto* ref : RefsAround(mine.center, std::max(mine.fRadius * 3.0f, 3000.0f))) {
@@ -1241,7 +1197,7 @@ namespace fv::Screen
 				int        best = -1, bestScore = std::numeric_limits<int>::min();
 				for (int i = 0; i < count; ++i) {
 					const auto& c = candidates[i];
-					if (c.nearby && HasVideoHint(c) && IsShown(c.geom) && origin.GetDistance(c.owner->GetPosition()) < 3000.0f) {
+					if (c.nearby && HasVideoHint(c) && (IsShown(c.geom) || IsFilmStill(c.geom)) && origin.GetDistance(c.owner->GetPosition()) < 3000.0f) {
 						const int sc = Score(c);
 						if (sc > bestScore) {
 							best = i;
@@ -1257,7 +1213,7 @@ namespace fv::Screen
 				// a projector (or anything without a screen of its own): use the best screen nearby
 				int best = -1, bestScore = kScreenLike - 1;
 				for (int i = 0; i < count; ++i) {
-					if (candidates[i].nearby && IsShown(candidates[i].geom)) {
+					if (candidates[i].nearby && (IsShown(candidates[i].geom) || IsFilmStill(candidates[i].geom))) {
 						// a film/video surface beats a plain screen behind it (Far Harbor's movie over the drive-in screen)
 						const int sc = Score(candidates[i]) + (HasVideoHint(candidates[i]) ? 100 : 0);
 						if (sc > bestScore) {
@@ -1276,15 +1232,30 @@ namespace fv::Screen
 			return false;
 		}
 
-		// A drive-in projector that is switched on shows its film over the screen: play on the film instead (the
-		// projector's light and sound stay). When it's switched off again we come back to the screen.
-		if (a_forceIndex < 0 && settings.hideOverlays && !(IsFilmStill(candidates[index].geom) && IsShown(candidates[index].geom))) {
-			if (auto film = FindShownFilm(candidates[index].geom); film.geom) {
-				auto* filmRoot = film.ref->Get3D();
-				candidates.push_back({ film.geom, film.name, film.pathLower, film.ref, filmRoot, ModelKey(film.ref), film.ref != a_ref });
-				log::info("{}: projector is on, playing on its film '{}' of {} instead of '{}'", RefName(a_ref), film.name, RefName(film.ref),
-					candidates[index].name);
-				index = static_cast<int>(candidates.size()) - 1;
+		// A drive-in film layer (the movie stills a projector shows) fades and switches with the film's own
+		// animation, so the video went black on it. Play on the plain screen right under the film instead; the
+		// film's stills are hidden while we play (the projector's light beam and sound stay).
+		if (IsFilmStill(candidates[index].geom)) {
+			const auto& film = candidates[index].geom->worldBound;
+			int         under = -1;
+			float       best = FLT_MAX;
+			for (int i = 0; i < static_cast<int>(candidates.size()); ++i) {
+				auto* g = candidates[i].geom;
+				if (IsFilmStill(g) || !IsShown(g) || Score(candidates[i]) < 0) {
+					continue;
+				}
+				const auto& b = g->worldBound;
+				const float d = film.center.GetDistance(b.center);
+				const float ratio = film.fRadius > 0.0f ? b.fRadius / film.fRadius : 0.0f;
+				if (d < film.fRadius * 0.5f && ratio > 0.5f && ratio < 2.0f && d < best) {
+					best = d;
+					under = i;
+				}
+			}
+			if (under >= 0) {
+				log::info("{}: '{}' is a film layer; playing on the screen under it, '{}' of {}", RefName(a_ref), candidates[index].name,
+					candidates[under].name, RefName(candidates[under].owner));
+				index = under;
 			}
 		}
 

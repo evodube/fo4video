@@ -116,5 +116,6 @@ namespace fv
 		std::size_t       _nextVideo{ 0 };
 		std::array<bool, 5> _keyWasDown{};
 		bool                _wasPaused{ false };
+		bool                _inBuildMode{ false };
 	};
 }

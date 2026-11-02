@@ -575,8 +575,24 @@ namespace fv
 		const auto&      settings = Settings::Get();
 		std::scoped_lock lock(_lock);
 
+		// Build mode: show every screen with its own look (and keep the video paused) until it's closed
+		static const RE::BSFixedString workshopMenu("WorkshopMenu");
+		auto*                          ui = RE::UI::GetSingleton();
+		const bool                     buildMode = ui && ui->GetMenuOpen(workshopMenu);
+		if (buildMode != _inBuildMode) {
+			log::info("build mode {}: {} the videos", buildMode ? "opened" : "closed", buildMode ? "hiding" : "showing");
+			_inBuildMode = buildMode;
+		}
+
 		for (auto& p : _players) {
 			if (p->stopping) {
+				continue;
+			}
+			if (buildMode) {
+				if (p->binding.bound) {
+					Screen::Unbind(p->binding);
+				}
+				p->rebindCooldown = 0;  // put it back right away when build mode closes
 				continue;
 			}
 			auto ref = p->ref.get();
@@ -712,8 +728,9 @@ namespace fv
 		if (ui->menuMode != 0 || ui->freezeFramePause != 0) {
 			return true;  // any menu that pauses the game (Esc, Pip-Boy, console, containers...)
 		}
-		static const std::array<RE::BSFixedString, 4> menus{
-			RE::BSFixedString("PauseMenu"), RE::BSFixedString("PipboyMenu"), RE::BSFixedString("LoadingMenu"), RE::BSFixedString("MainMenu")
+		static const std::array<RE::BSFixedString, 5> menus{
+			RE::BSFixedString("PauseMenu"), RE::BSFixedString("PipboyMenu"), RE::BSFixedString("LoadingMenu"), RE::BSFixedString("MainMenu"),
+			RE::BSFixedString("WorkshopMenu")  // build mode: the video is hidden there too (see Maintain)
 		};
 		for (const auto& name : menus) {
 			if (ui->GetMenuOpen(name)) {
