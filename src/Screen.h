@@ -53,6 +53,7 @@ namespace fv
 		bool                                classic{ false };       // TV screen: whole texture, untouched UVs (like 0.1)
 		bool                                twoSidedCleared{ false };  // we stopped drawing the back of the sheet
 		int                                 filmScanCooldown{ 0 };
+		std::vector<const RE::NiAVObject*>  filmLogged;  // film layers already written to the log
 	};
 
 	namespace Screen

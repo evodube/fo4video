@@ -335,6 +335,7 @@ namespace fv::Screen
 			RE::NiPoint3          faceNormal[2]{};  // world-space outward normal
 			RE::NiPoint3          faceCenter[2]{};  // world-space centre
 			bool                  partial{ false };  // screen face uses only part of the texture (frame shares it)
+			bool                  skinned{ false };
 		};
 
 		struct Vec3
@@ -568,6 +569,21 @@ namespace fv::Screen
 				return l > 1e-9 ? Vec3{ v.x / l, v.y / l, v.z / l } : Vec3{};
 			};
 			const bool skinned = a_geom->skinInstance != nullptr;  // animated by bones: its rest pose says little about "up"
+			out.skinned = skinned;
+			// Which triangle winding is the visible side? Compare windings with the vertex normals over the whole
+			// mesh (most of it is authored correctly), then trust the winding per face: some screens have both
+			// sides' vertex normals pointing the same way, which made "the side facing you" a coin toss.
+			double windingVote = 0.0;
+			if (hasNormals) {
+				for (const auto& tr : tris) {
+					if (tr.area > 0) {
+						const Vec3 vn{ nrm[tr.v[0]].x + nrm[tr.v[1]].x + nrm[tr.v[2]].x, nrm[tr.v[0]].y + nrm[tr.v[1]].y + nrm[tr.v[2]].y,
+							nrm[tr.v[0]].z + nrm[tr.v[1]].z + nrm[tr.v[2]].z };
+						windingVote += tr.area * tr.n.Dot(vn);
+					}
+				}
+			}
+			const double windingSign = windingVote < 0.0 ? -1.0 : 1.0;
 			auto orientFace = [&](std::uint32_t a_root, const std::array<float, 4>& a_rect, const std::vector<std::array<double, 5>>& a_pts,
 								  float& a_aspect, int& a_orient, RE::NiPoint3& a_normal, RE::NiPoint3& a_center) {
 				a_aspect = 0.0f;
@@ -586,14 +602,20 @@ namespace fv::Screen
 				if (a_rect[2] - a_rect[0] < 1e-4f || a_rect[3] - a_rect[1] < 1e-4f || !FitUVMap(a_pts, du, dv)) {
 					return;
 				}
-				// outward normal: average vertex normal if the mesh has them, else the triangle winding
-				Vec3 n{};
+				// outward normal: the face's triangle winding (the side the renderer draws), oriented like the
+				// mesh's normals; vertex normals only if the winding cancels out
+				Vec3 n{}, vn{};
 				for (std::uint32_t t = 0; t < tris.size(); ++t) {
 					if (tris[t].area > 0 && find(t) == a_root) {
-						for (auto vi : tris[t].v) {
-							n = { n.x + nrm[vi].x, n.y + nrm[vi].y, n.z + nrm[vi].z };
+						const auto& tr = tris[t];
+						n = { n.x + tr.n.x * tr.area * windingSign, n.y + tr.n.y * tr.area * windingSign, n.z + tr.n.z * tr.area * windingSign };
+						for (auto vi : tr.v) {
+							vn = { vn.x + nrm[vi].x, vn.y + nrm[vi].y, vn.z + nrm[vi].z };
 						}
 					}
+				}
+				if (n.Len() < 1e-9) {
+					n = vn;
 				}
 				if (n.Len() < 1e-6) {
 					n = du.Cross(dv);
@@ -980,6 +1002,7 @@ namespace fv::Screen
 			for (auto* ref : refs) {
 				std::vector<Candidate> layers;
 				Collect(ref->Get3D(), {}, layers);
+				const float refDist = mine.center.GetDistance(ref->GetPosition());
 				for (auto& c : layers) {
 					if (c.geom == geom) {
 						continue;
@@ -988,17 +1011,29 @@ namespace fv::Screen
 					const bool effect = prop && prop->material && prop->material->GetType() == RE::BSShaderMaterial::Type::kEffect;
 					const auto tex = Lower(BaseTextureName(prop));
 					const auto name = Lower(c.name);
-					const bool film = ContainsAny(tex, { "moviefx", "moviestill" }) ||
-					                  (effect && (ContainsAny(tex, { "movie", "film" }) || ContainsAny(name, { "texholder", "movie", "film" }) ||
-												 ContainsAny(c.pathLower, { "movie" })));
-					if (!film || ContainsAny(name, { "beam", "light", "flare", "ray" }) || ContainsAny(tex, { "beam", "flare", "lightray" })) {
+					if (ContainsAny(name, { "beam", "light", "flare", "ray" }) || ContainsAny(tex, { "beam", "flare", "lightray" })) {
+						continue;  // the projector's light stays
+					}
+					// movie stills are only ever the film: hide them if their object is anywhere near the screen
+					// (a layer that is switched off has no up-to-date bounds, so go by the object's position)
+					const bool stills = ContainsAny(tex, { "moviefx", "moviestill", "drivein\\effects", "drivein/effects" });
+					const bool filmish = effect && (ContainsAny(tex, { "movie", "film" }) || ContainsAny(name, { "texholder", "movie", "film" }) ||
+					                               ContainsAny(c.pathLower, { "movie" }));
+					if (!stills && !filmish) {
 						continue;
 					}
 					const auto& theirs = c.geom->worldBound;
-					if (mine.center.GetDistance(theirs.center) > std::max(mine.fRadius, theirs.fRadius) * 1.5f) {
-						continue;
+					const float boundDist = mine.center.GetDistance(theirs.center);
+					const bool  near = stills ? (refDist <= mine.fRadius * 2.0f + 2000.0f || boundDist <= mine.fRadius * 2.0f + theirs.fRadius)
+					                          : boundDist <= std::max(mine.fRadius, theirs.fRadius) * 1.5f;
+					if (std::ranges::find(a_binding.filmLogged, c.geom) == a_binding.filmLogged.end()) {
+						a_binding.filmLogged.push_back(c.geom);
+						log::info("  film layer '{}' of {} tex '{}': object {:.0f} / bounds {:.0f} away (screen radius {:.0f}) -> {}", c.name, RefName(ref), tex,
+							refDist, boundDist, mine.fRadius, near ? "hide" : "too far, keep");
 					}
-					HideLayer(a_binding, c.geom);
+					if (near) {
+						HideLayer(a_binding, c.geom);
+					}
 				}
 			}
 			if (a_binding.hiddenLayers.size() > before) {
@@ -1047,6 +1082,19 @@ namespace fv::Screen
 		}
 		if (index >= 0 && a_forceIndex < 0 && !candidates[index].nearby && Score(candidates[index]) < 0) {
 			index = -1;  // an old choice of a light beam or similar: pick again
+		}
+		// TVs always play on their ScreenAnim mesh (vanilla and VotW TVs), whatever was saved; F7 can still
+		// move it for the moment
+		if (a_forceIndex < 0 && settings.classicTV) {
+			for (int i = 0; i < count; ++i) {
+				const auto lower = Lower(candidates[i].name);
+				auto*      p = GetShaderProperty(candidates[i].geom);
+				if (!candidates[i].nearby && lower.starts_with("screenanim") && lower.find("noise") == std::string::npos && p && p->material &&
+					p->material->GetType() == RE::BSShaderMaterial::Type::kEffect) {
+					index = i;
+					break;
+				}
+			}
 		}
 		if (index < 0 && !settings.forceNode.empty()) {
 			for (int i = 0; i < count; ++i) {
@@ -1180,6 +1228,13 @@ namespace fv::Screen
 
 			// work out the screen face, which way is up, and whether the frame shares the texture
 			shape = AnalyzeMesh(geom, TextureAspect(a_binding.originalBase.get()));
+			// VotW's controlled ceiling projector screen is lowered by bones; its stored pose can't say which way is
+			// up, and the picture came out upside down
+			if (origTexLower.find("ceilingprojectorscreenclean") != std::string::npos && Lower(candidates[index].name).starts_with("ref_attach_node")) {
+				shape.flipHint ^= 1;
+				shape.faceOrient[0] ^= 1;
+				shape.faceOrient[1] ^= 1;
+			}
 			flip = (userFlip ^ shape.flipHint) & 7;
 			const auto inTexture = [](const std::array<float, 4>& r) { return r[0] >= -0.01f && r[1] >= -0.01f && r[2] <= 1.01f && r[3] <= 1.01f; };
 			const std::array<float, 4> whole{ shape.all.u0, shape.all.v0, shape.all.u1, shape.all.v1 };
@@ -1190,25 +1245,35 @@ namespace fv::Screen
 			for (int k = 0; k < shape.faces; ++k) {
 				chosen.push_back(k);
 			}
-			if (shape.faces == 2 && !settings.bothSides) {
-				int front = 0;
-				if (auto* player = RE::PlayerCharacter::GetSingleton()) {
-					const auto eye = player->GetPosition();
-					float      best = -FLT_MAX;
-					for (int k = 0; k < 2; ++k) {
-						const auto  c = shape.faceCenter[k];
-						const auto  n = shape.faceNormal[k];
-						const float facing = n.x * (eye.x - c.x) + n.y * (eye.y - c.y) + n.z * (eye.z - c.z);
-						if (facing > best) {
-							best = facing;
-							front = k;
-						}
-					}
+			// how far in front of each face the player is (negative = behind it)
+			std::array<float, 2> facing{ 0.0f, 0.0f };
+			if (auto* player = RE::PlayerCharacter::GetSingleton()) {
+				auto eye = player->GetPosition();
+				eye.z += 120.0f;  // roughly eye height
+				for (int k = 0; k < shape.faces && k < 2; ++k) {
+					const auto c = shape.faceCenter[k];
+					const auto n = shape.faceNormal[k];
+					facing[k] = n.x * (eye.x - c.x) + n.y * (eye.y - c.y) + n.z * (eye.z - c.z);
 				}
+			}
+			if (shape.faces == 2 && !settings.bothSides) {
+				// the side facing you; remembered for this mesh so Shift+F7 / F7 don't jump to the other side
+				static std::unordered_map<const RE::BSGeometry*, int> lastFront;
+				int  front = facing[1] > facing[0] ? 1 : 0;
+				auto it = lastFront.find(geom);
+				if (a_forceIndex >= 0 && it != lastFront.end()) {
+					front = it->second;
+				}
+				lastFront[geom] = front;
 				if (userFlip & 8) {
 					front = 1 - front;
 				}
 				chosen = { front };
+			}
+			// a single sheet seen from behind shows the picture mirrored: turn it round (Ctrl+Shift+F7 undoes it)
+			const bool fromBehind = shape.faces == 1 && (facing[0] < 0.0f) != ((userFlip & 8) != 0);
+			if (fromBehind) {
+				flip ^= 2;
 			}
 			const bool facesInTexture = std::ranges::all_of(chosen, [&](int k) { return inTexture(shape.face[k]); }) && !chosen.empty();
 
@@ -1218,7 +1283,7 @@ namespace fv::Screen
 				const int k = chosen[i];
 				a_binding.faceRects[i] = shape.face[k];
 				a_binding.faceAspect[i] = shape.faceAspect[k];
-				a_binding.faceOrient[i] = (userFlip ^ shape.faceOrient[k]) & 7;
+				a_binding.faceOrient[i] = (userFlip ^ shape.faceOrient[k] ^ (fromBehind ? 2 : 0)) & 7;
 			}
 			const bool otherSideHidden = shape.faces == 2 && chosen.size() == 1;
 			if (settings.composite && (shape.partial || otherSideHidden) && facesInTexture) {
@@ -1326,14 +1391,14 @@ namespace fv::Screen
 				a_binding.twoSidedCleared ? ", back of sheet culled" : "");
 		}
 
-		log::info("{}: bound mesh {}/{} '{}'{} ({} shader{}, texture '{}', sRGB={}, mesh uv [{:.3f},{:.3f}]-[{:.3f},{:.3f}], screen face {} [{:.3f},{:.3f}]-[{:.3f},{:.3f}], {}, aspect {:.2f}, flip {} (auto {}), controllers {}, hidden layers {})",
+		log::info("{}: bound mesh {}/{} '{}'{} ({} shader{}, texture '{}', sRGB={}, mesh uv [{:.3f},{:.3f}]-[{:.3f},{:.3f}], screen face {} [{:.3f},{:.3f}]-[{:.3f},{:.3f}], {}, aspect {:.2f}, flip {} (auto {}){}, controllers {}, hidden layers {})",
 			RefName(a_ref), index + 1, count, candidates[index].name,
 			candidates[index].nearby ? std::format(" of nearby {}", RefName(candidates[index].owner)) : std::string(), a_binding.isEffect ? "effect" : "lighting",
 			a_binding.hadGlow ? " + glowmap" : "",
 			a_binding.originalBase ? std::string(a_binding.originalBase->GetName()) : std::string("<none>"), a_binding.originalWasSRGB,
 			shape.all.u0, shape.all.v0, shape.all.u1, shape.all.v1, shape.faces, shape.face[0][0], shape.face[0][1], shape.face[0][2], shape.face[0][3],
 			a_binding.composite ? "video only inside the face" : (a_binding.overrideUV ? "video over whole mesh" : "uv untouched"), a_binding.screenAspect,
-			flip, shape.flipHint, a_binding.savedControllers ? "stopped" : "none", a_binding.hiddenLayers.size());
+			flip, shape.flipHint, shape.skinned ? ", skinned" : "", a_binding.savedControllers ? "stopped" : "none", a_binding.hiddenLayers.size());
 		return true;
 	}
 
