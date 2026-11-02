@@ -1312,8 +1312,12 @@ namespace fv::Screen
 				}
 				chosen = { front };
 			}
-			// a single sheet seen from behind shows the picture mirrored: turn it round (Ctrl+Shift+F7 undoes it)
-			const bool fromBehind = shape.faces == 1 && (facing[0] < 0.0f) != ((userFlip & 8) != 0);
+			// The drive-in screen's sheet faces away from the audience, so the picture came out mirrored. This used
+			// to depend on where the player stood when the video started, which made it mirrored only some of the
+			// time; now it's fixed for the drive-in (Ctrl+Shift+F7 undoes it) and nothing else is turned round.
+			const auto rootLower = Lower(candidates[index].root ? Str(candidates[index].root->name) : std::string());
+			const bool driveIn = rootLower.find("drivein") != std::string::npos;
+			const bool fromBehind = shape.faces == 1 && driveIn != ((userFlip & 8) != 0);
 			if (fromBehind) {
 				flip ^= 2;
 			}
