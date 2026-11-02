@@ -189,17 +189,6 @@ namespace fv::Screen
 			}
 		}
 
-		// Drawn at all: neither the mesh nor any node above it is switched off.
-		bool IsShown(RE::NiAVObject* a_obj)
-		{
-			for (int depth = 0; a_obj && depth < 64; a_obj = a_obj->parent, ++depth) {
-				if (a_obj->GetAppCulled()) {
-					return false;
-				}
-			}
-			return true;
-		}
-
 		// The selected object's meshes first, then screen-like meshes of objects around it, nearest first
 		// (a projector's screen, or a drive-in screen that can't be clicked in the console).
 		std::vector<Candidate> Candidates(RE::TESObjectREFR* a_ref, bool a_includeNearby)
@@ -1056,64 +1045,6 @@ namespace fv::Screen
 			a_obj->SetAppCulled(true);
 		}
 
-		// A drive-in film layer: the movie stills a projector shows on the screen (Far Harbor's film, Rebuild's
-		// film object).
-		bool IsFilmStill(RE::BSGeometry* a_geom)
-		{
-			const auto tex = Lower(BaseTextureName(GetShaderProperty(a_geom)));
-			return ContainsAny(tex, { "moviefx", "moviestill", "drivein\\effects", "drivein/effects" });
-		}
-
-		// Refs with 3D within a_radius of a_center, in every loaded cell.
-		std::vector<RE::TESObjectREFR*> RefsAround(const RE::NiPoint3& a_center, float a_radius)
-		{
-			std::vector<RE::TESObjectREFR*> refs;
-			ForEachLoadedCell([&](RE::TESObjectCELL* a_cell) {
-				a_cell->ForEachReferenceInRange(a_center, a_radius, [&](RE::TESObjectREFR* a_other) {
-					if (a_other && !a_other->IsActor() && !a_other->IsDisabled() && a_other->Get3D() && std::ranges::find(refs, a_other) == refs.end()) {
-						refs.push_back(a_other);
-					}
-					return RE::BSContainer::ForEachResult::kContinue;
-				});
-			});
-			return refs;
-		}
-
-		// Hide the drive-in film's stills drawn over the screen we play on (also the ones a projector switches on
-		// later; this runs every couple of seconds). The projector's light beam and sound are left alone.
-		void ScanFilmLayers(ScreenBinding& a_binding)
-		{
-			auto* geom = a_binding.geometry.get();
-			if (!geom || geom->worldBound.fRadius <= 0.0f) {
-				return;
-			}
-			const auto& mine = geom->worldBound;
-			const auto  before = a_binding.hiddenLayers.size();
-			for (auto* ref : RefsAround(mine.center, std::max(mine.fRadius * 3.0f, 3000.0f))) {
-				std::vector<Candidate> layers;
-				Collect(ref->Get3D(), {}, layers);
-				const float refDist = mine.center.GetDistance(ref->GetPosition());
-				for (auto& c : layers) {
-					if (c.geom == geom || !IsFilmStill(c.geom)) {
-						continue;
-					}
-					const auto& theirs = c.geom->worldBound;
-					const float boundDist = mine.center.GetDistance(theirs.center);
-					const bool  isNear = refDist <= mine.fRadius * 2.0f + 2000.0f || boundDist <= mine.fRadius * 2.0f + theirs.fRadius;
-					if (std::ranges::find(a_binding.filmLogged, c.geom) == a_binding.filmLogged.end()) {
-						a_binding.filmLogged.push_back(c.geom);
-						log::info("  film layer '{}' of {}: object {:.0f} / bounds {:.0f} away (screen radius {:.0f}) -> {}", c.name, RefName(ref), refDist,
-							boundDist, mine.fRadius, isNear ? "hide" : "too far, keep");
-					}
-					if (isNear) {
-						HideLayer(a_binding, c.geom);
-					}
-				}
-			}
-			if (a_binding.hiddenLayers.size() > before) {
-				log::info("'{}': hid {} other film layer(s)", a_binding.geometryName, a_binding.hiddenLayers.size() - before);
-			}
-		}
 	}
 
 	bool Bind(RE::TESObjectREFR* a_ref, RE::NiTexture* a_slotTexture, ScreenBinding& a_binding, int a_forceIndex)
@@ -1192,7 +1123,7 @@ namespace fv::Screen
 				int        best = -1, bestScore = std::numeric_limits<int>::min();
 				for (int i = 0; i < count; ++i) {
 					const auto& c = candidates[i];
-					if (c.nearby && HasVideoHint(c) && (IsShown(c.geom) || IsFilmStill(c.geom)) && origin.GetDistance(c.owner->GetPosition()) < 3000.0f) {
+					if (c.nearby && HasVideoHint(c) && origin.GetDistance(c.owner->GetPosition()) < 3000.0f) {
 						const int sc = Score(c);
 						if (sc > bestScore) {
 							best = i;
@@ -1208,7 +1139,7 @@ namespace fv::Screen
 				// a projector (or anything without a screen of its own): use the best screen nearby
 				int best = -1, bestScore = kScreenLike - 1;
 				for (int i = 0; i < count; ++i) {
-					if (candidates[i].nearby && (IsShown(candidates[i].geom) || IsFilmStill(candidates[i].geom))) {
+					if (candidates[i].nearby) {
 						// a film/video surface beats a plain screen behind it (Far Harbor's movie over the drive-in screen)
 						const int sc = Score(candidates[i]) + (HasVideoHint(candidates[i]) ? 100 : 0);
 						if (sc > bestScore) {
@@ -1225,33 +1156,6 @@ namespace fv::Screen
 		}
 		if (index < 0) {
 			return false;
-		}
-
-		// A drive-in film layer (the movie stills a projector shows) fades and switches with the film's own
-		// animation, so the video went black on it. Play on the plain screen right under the film instead; the
-		// film's stills are hidden while we play (the projector's light beam and sound stay).
-		if (IsFilmStill(candidates[index].geom)) {
-			const auto& film = candidates[index].geom->worldBound;
-			int         under = -1;
-			float       best = FLT_MAX;
-			for (int i = 0; i < static_cast<int>(candidates.size()); ++i) {
-				auto* g = candidates[i].geom;
-				if (IsFilmStill(g) || !IsShown(g) || Score(candidates[i]) < 0) {
-					continue;
-				}
-				const auto& b = g->worldBound;
-				const float d = film.center.GetDistance(b.center);
-				const float ratio = film.fRadius > 0.0f ? b.fRadius / film.fRadius : 0.0f;
-				if (d < film.fRadius * 0.5f && ratio > 0.5f && ratio < 2.0f && d < best) {
-					best = d;
-					under = i;
-				}
-			}
-			if (under >= 0) {
-				log::info("{}: '{}' is a film layer; playing on the screen under it, '{}' of {}", RefName(a_ref), candidates[index].name,
-					candidates[under].name, RefName(candidates[under].owner));
-				index = under;
-			}
 		}
 
 		auto* geom = candidates[index].geom;
@@ -1437,8 +1341,7 @@ namespace fv::Screen
 
 			// glowing layers drawn over the same spot (a TV's noise/glass overlays, the stills and credits of the
 			// drive-in movie) would cover the video: hide them while we play
-			a_binding.onFilm = IsFilmStill(geom);
-			if (a_binding.isEffect && settings.hideOverlays && !a_binding.onFilm) {
+			if (a_binding.isEffect && settings.hideOverlays) {
 				std::vector<Candidate> layers;
 				Collect(candidates[index].root, {}, layers);
 				const auto& mine = geom->worldBound;
@@ -1478,15 +1381,6 @@ namespace fv::Screen
 		RebuildRenderPasses(prop);
 		a_binding.geometryName = candidates[index].name;
 		a_binding.bound = true;
-		if (a_binding.onFilm) {
-			// the film switches its stills on and off as it runs; keep the one we play on shown
-			a_binding.onFilmWasCulled = geom->GetAppCulled();
-			geom->SetAppCulled(false);
-		}
-		if (!a_binding.classic && settings.hideOverlays) {
-			ScanFilmLayers(a_binding);  // on a film: hide its other stills
-		}
-
 		if (a_binding.classic) {
 			log::info("{}: bound TV screen {}/{} '{}' (effect shader, texture '{}', sRGB={}): whole video, mesh UVs untouched like 0.1, flip {}",
 				RefName(a_ref), index + 1, count, candidates[index].name,
@@ -1558,9 +1452,6 @@ namespace fv::Screen
 				prop->SetFlag(RE::BSShaderProperty::EShaderPropertyFlag::kGrayscaleToPaletteAlpha, had(RE::BSShaderProperty::EShaderPropertyFlag::kGrayscaleToPaletteAlpha));
 			}
 		}
-		if (a_binding.onFilm && a_binding.geometry) {
-			a_binding.geometry->SetAppCulled(a_binding.onFilmWasCulled);
-		}
 		for (std::size_t i = 0; i < a_binding.hiddenLayers.size(); ++i) {
 			if (auto& layer = a_binding.hiddenLayers[i]) {
 				layer->SetAppCulled(i < a_binding.hiddenLayerWasCulled.size() && a_binding.hiddenLayerWasCulled[i]);
@@ -1575,7 +1466,7 @@ namespace fv::Screen
 
 	bool StillValid(const ScreenBinding& a_binding)
 	{
-		if (!a_binding.bound || a_binding.filmAppeared) {
+		if (!a_binding.bound) {
 			return false;
 		}
 		auto owner = a_binding.owner.get();
@@ -1610,13 +1501,6 @@ namespace fv::Screen
 			if (layer && !layer->GetAppCulled()) {
 				layer->SetAppCulled(true);  // the film's own animation switched it back on
 			}
-		}
-		if (a_binding.onFilm && a_binding.geometry && a_binding.geometry->GetAppCulled()) {
-			a_binding.geometry->SetAppCulled(false);
-		}
-		if (a_binding.bound && !a_binding.classic && Settings::Get().hideOverlays && --a_binding.filmScanCooldown <= 0) {
-			a_binding.filmScanCooldown = 12;  // Maintain runs every 10 frames: about every 2 seconds
-			ScanFilmLayers(a_binding);
 		}
 	}
 

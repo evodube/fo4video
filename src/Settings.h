@@ -37,6 +37,10 @@ namespace fv
 		float volume{ 1.0f };
 		float minDistance{ 150.0f };
 		float maxDistance{ 1500.0f };
+		float falloffCurve{ 2.0f };
+		float bigScreenRadius{ 500.0f };   // screens this big (mesh radius) use the big-screen distances
+		float bigMinDistance{ 1500.0f };
+		float bigMaxDistance{ 12000.0f };
 
 		void Load();
 

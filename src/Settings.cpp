@@ -116,11 +116,16 @@ namespace fv
 		volume = std::clamp(ReadFloat(L"Audio", L"fVolume", volume), 0.0f, 4.0f);
 		minDistance = ReadFloat(L"Audio", L"fMinDistance", minDistance);
 		maxDistance = std::max(ReadFloat(L"Audio", L"fMaxDistance", maxDistance), minDistance + 1.0f);
+		falloffCurve = std::clamp(ReadFloat(L"Audio", L"fFalloffCurve", falloffCurve), 0.25f, 8.0f);
+		bigScreenRadius = ReadFloat(L"Audio", L"fBigScreenSize", bigScreenRadius);
+		bigMinDistance = ReadFloat(L"Audio", L"fBigScreenMinDistance", bigMinDistance);
+		bigMaxDistance = std::max(ReadFloat(L"Audio", L"fBigScreenMaxDistance", bigMaxDistance), bigMinDistance + 1.0f);
 
 		log::info("settings: hotkeys={} play=0x{:X} test=0x{:X} stop=0x{:X} dump=0x{:X} mesh=0x{:X} loop={} pause={} maxScreens={}",
 			enableHotkeys, keyPlay, keyTestPattern, keyStop, keyDump, keyNextMesh, loop, pauseInMenus, maxScreens);
 		log::info("settings: screenNames=[{}] forceNode='{}' srgb={} fitUV={} stopAnim={} aspect={} inside={} classicTV={} nearby={:.0f} audio={} volume={:.2f} dist={:.0f}-{:.0f}",
 			[&] { std::string s; for (auto& n : screenNames) { if (!s.empty()) s += ","; s += n; } return s; }(),
 			forceNode, srgb, fitUV, stopScreenAnimation, aspectMode, composite, classicTV, nearbyRadius, enableAudio, volume, minDistance, maxDistance);
+		log::info("settings: falloff curve {:.2f}, big screens (size >= {:.0f}) heard {:.0f}-{:.0f}", falloffCurve, bigScreenRadius, bigMinDistance, bigMaxDistance);
 	}
 }

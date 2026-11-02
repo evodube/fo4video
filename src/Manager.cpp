@@ -72,17 +72,18 @@ namespace fv
 			}
 		}
 
-		float Attenuate(float a_distance)
+		// Full volume inside a_min, silent at a_max, fading in between (a_curve 1 = straight line, 2 = the
+		// default smooth fade that drops quicker near the screen, higher = quieter sooner).
+		float Attenuate(float a_distance, float a_min, float a_max, float a_curve)
 		{
-			const auto& s = Settings::Get();
-			if (a_distance <= s.minDistance) {
+			if (a_distance <= a_min) {
 				return 1.0f;
 			}
-			if (a_distance >= s.maxDistance) {
+			if (a_distance >= a_max) {
 				return 0.0f;
 			}
-			const float t = 1.0f - (a_distance - s.minDistance) / (s.maxDistance - s.minDistance);
-			return t * t;
+			const float t = 1.0f - (a_distance - a_min) / (a_max - a_min);
+			return std::pow(t, a_curve);
 		}
 
 		HWND GameWindow()
@@ -634,11 +635,17 @@ namespace fv
 
 			float volume = 0.0f;
 			if (p->binding.bound && player) {
-				const auto pos = ref->GetPosition();
+				// big screens (the drive-in) carry much further, measured from the screen itself
+				auto*      geom = p->binding.geometry.get();
+				const bool big = geom && settings.bigScreenRadius > 0.0f && geom->worldBound.fRadius >= settings.bigScreenRadius;
+				const auto pos = big ? geom->worldBound.center : ref->GetPosition();
 				const float dx = pos.x - playerPos.x;
 				const float dy = pos.y - playerPos.y;
 				const float dz = pos.z - playerPos.z;
-				volume = settings.volume * p->userVolume * Attenuate(std::sqrt(dx * dx + dy * dy + dz * dz));
+				const float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+				const float gain = big ? Attenuate(dist, settings.bigMinDistance, settings.bigMaxDistance, settings.falloffCurve)
+				                       : Attenuate(dist, settings.minDistance, settings.maxDistance, settings.falloffCurve);
+				volume = settings.volume * p->userVolume * gain;
 			}
 			p->volume = volume;
 		}
