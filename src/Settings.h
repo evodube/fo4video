@@ -18,12 +18,13 @@ namespace fv
 		int          maxScreens{ 8 };
 
 		// [Screen]
-		std::vector<std::string> screenNames{ "screen", "display", "monitor", "crt", "tube" };
+		std::vector<std::string> screenNames{ "screen", "display", "monitor", "crt" };
 		std::string              forceNode;
 		int                      srgb{ -1 };  // -1 auto (match original texture), 0 linear, 1 sRGB
 		bool                     fitUV{ true };
 		bool                     stopScreenAnimation{ true };
-		int                      aspectMode{ 0 };            // 0 = stretch, 1 = keep aspect (black bars)
+		int                      aspectMode{ 1 };            // 0 = stretch, 1 = keep aspect (black bars)
+		bool                     composite{ true };          // draw the video only into the screen part of a shared texture
 		float                    nearbyRadius{ 8000.0f };    // projectors / Ctrl+F7 look for screens this close
 		float                    brightness{ 1.0f };
 		std::string              placeholderPrefix;  // empty = try "Textures\\" then ""

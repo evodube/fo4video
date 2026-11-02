@@ -1,0 +1,40 @@
+#pragma once
+
+namespace fv
+{
+	// Draws the screen's original texture, then the video into one or more rectangles of it,
+	// into a render target. Used when a mesh shares one texture between its screen and its frame.
+	// Render thread only. Saves and restores every bit of D3D state it touches.
+	class Compositor
+	{
+	public:
+		struct Region
+		{
+			float x0, y0, x1, y1;  // destination, in texture pixels (y down)
+			float u0, v0, u1, v1;  // video coordinates at the region's corners (outside 0..1 = black bar)
+		};
+
+		static Compositor& Get();
+
+		bool Ready(ID3D11Device* a_device);
+
+		void Compose(ID3D11DeviceContext* a_context, ID3D11RenderTargetView* a_target, std::uint32_t a_width, std::uint32_t a_height,
+			ID3D11ShaderResourceView* a_base, ID3D11ShaderResourceView* a_video, std::span<const Region> a_regions);
+
+	private:
+		bool Init(ID3D11Device* a_device);
+		void Draw(ID3D11DeviceContext* a_context, std::uint32_t a_width, std::uint32_t a_height, const Region& a_region,
+			ID3D11ShaderResourceView* a_srv, ID3D11SamplerState* a_sampler);
+
+		ComPtr<ID3D11VertexShader>      _vs;
+		ComPtr<ID3D11PixelShader>       _ps;
+		ComPtr<ID3D11Buffer>            _cb;
+		ComPtr<ID3D11SamplerState>      _clamp;
+		ComPtr<ID3D11SamplerState>      _border;
+		ComPtr<ID3D11BlendState>        _blend;
+		ComPtr<ID3D11DepthStencilState> _depth;
+		ComPtr<ID3D11RasterizerState>   _raster;
+		bool                            _tried{ false };
+		bool                            _ok{ false };
+	};
+}

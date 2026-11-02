@@ -1,5 +1,6 @@
 #include "Manager.h"
 
+#include "Compositor.h"
 #include "Settings.h"
 
 namespace fv
@@ -115,6 +116,54 @@ namespace fv
 		}
 	}
 
+	namespace
+	{
+		// Pixel size of the texture the screen originally used (what the frame/border parts sample).
+		bool BaseSize(ID3D11ShaderResourceView* a_srv, std::uint32_t& a_w, std::uint32_t& a_h)
+		{
+			if (!a_srv) {
+				return false;
+			}
+			ComPtr<ID3D11Resource> res;
+			a_srv->GetResource(&res);
+			ComPtr<ID3D11Texture2D> tex;
+			if (!res || FAILED(res.As(&tex))) {
+				return false;
+			}
+			D3D11_TEXTURE2D_DESC desc{};
+			tex->GetDesc(&desc);
+			a_w = desc.Width;
+			a_h = desc.Height;
+			return a_w > 0 && a_h > 0;
+		}
+
+		// Video coordinates for the corners of one screen face: keeps the video's shape (black bars) and orientation.
+		Compositor::Region FaceRegion(const std::array<float, 4>& a_face, std::uint32_t a_w, std::uint32_t a_h, float a_faceAspect,
+			std::uint32_t a_videoW, std::uint32_t a_videoH, int a_flip)
+		{
+			Compositor::Region r{ a_face[0] * a_w, a_face[1] * a_h, a_face[2] * a_w, a_face[3] * a_h, 0.0f, 0.0f, 1.0f, 1.0f };
+			if (Settings::Get().aspectMode == 1 && a_faceAspect > 0.0f && a_videoW && a_videoH) {
+				const float video = static_cast<float>(a_videoW) / static_cast<float>(a_videoH);
+				if (video > a_faceAspect * 1.03f) {
+					const float half = 0.5f * video / a_faceAspect;  // video is wider: bars top and bottom
+					r.v0 = 0.5f - half;
+					r.v1 = 0.5f + half;
+				} else if (video < a_faceAspect * 0.97f) {
+					const float half = 0.5f * a_faceAspect / video;  // video is narrower: bars left and right
+					r.u0 = 0.5f - half;
+					r.u1 = 0.5f + half;
+				}
+			}
+			if (a_flip & 1) {
+				std::swap(r.v0, r.v1);
+			}
+			if (a_flip & 2) {
+				std::swap(r.u0, r.u1);
+			}
+			return r;
+		}
+	}
+
 	// ---------------- Slot ----------------
 
 	bool Slot::Ensure(ID3D11Device* a_device, std::uint32_t a_width, std::uint32_t a_height, bool a_srgb)
@@ -191,10 +240,56 @@ namespace fv
 		a_context->Unmap(texture.Get(), 0);
 	}
 
-	void Slot::Patch(int a_index)
+	bool Slot::EnsureComposite(ID3D11Device* a_device, std::uint32_t a_width, std::uint32_t a_height, bool a_srgb)
+	{
+		if (compTexture && compWidth == a_width && compHeight == a_height && compSRGB == a_srgb) {
+			return true;
+		}
+		Unpatch();
+		compSRV.Reset();
+		compRTV.Reset();
+		compTexture.Reset();
+
+		D3D11_TEXTURE2D_DESC desc{};
+		desc.Width = a_width;
+		desc.Height = a_height;
+		desc.MipLevels = 1;
+		desc.ArraySize = 1;
+		desc.Format = DXGI_FORMAT_R8G8B8A8_TYPELESS;
+		desc.SampleDesc.Count = 1;
+		desc.Usage = D3D11_USAGE_DEFAULT;
+		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+		if (FAILED(a_device->CreateTexture2D(&desc, nullptr, &compTexture))) {
+			log::error("composite texture {}x{} failed", a_width, a_height);
+			return false;
+		}
+		const auto format = a_srgb ? DXGI_FORMAT_R8G8B8A8_UNORM_SRGB : DXGI_FORMAT_R8G8B8A8_UNORM;
+		D3D11_RENDER_TARGET_VIEW_DESC rtv{};
+		rtv.Format = format;
+		rtv.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+		srvDesc.Format = format;
+		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+		srvDesc.Texture2D.MipLevels = 1;
+		if (FAILED(a_device->CreateRenderTargetView(compTexture.Get(), &rtv, &compRTV)) ||
+			FAILED(a_device->CreateShaderResourceView(compTexture.Get(), &srvDesc, &compSRV))) {
+			compTexture.Reset();
+			compRTV.Reset();
+			compSRV.Reset();
+			return false;
+		}
+		compWidth = a_width;
+		compHeight = a_height;
+		compSRGB = a_srgb;
+		compNeedsDraw = true;
+		log::info("composite texture {}x{} created (sRGB={})", a_width, a_height, a_srgb);
+		return true;
+	}
+
+	void Slot::Patch(int a_index, ID3D11ShaderResourceView* a_want)
 	{
 		auto* tex = niTexture.get();
-		if (!tex || !srv) {
+		if (!tex || !a_want) {
 			return;
 		}
 		auto* rt = tex->rendererTexture;
@@ -202,7 +297,7 @@ namespace fv
 			return;
 		}
 		auto* cur = reinterpret_cast<ID3D11ShaderResourceView*>(rt->srView);
-		auto* want = srv.Get();
+		auto* want = a_want;
 
 		if (rt != patchedRT) {
 			// never touch a texture unless it is verifiably our placeholder
@@ -251,7 +346,10 @@ namespace fv
 		Unpatch();
 		srv.Reset();
 		texture.Reset();
-		width = height = 0;
+		compSRV.Reset();
+		compRTV.Reset();
+		compTexture.Reset();
+		width = height = compWidth = compHeight = 0;
 	}
 
 	// ---------------- Manager ----------------
@@ -499,6 +597,7 @@ namespace fv
 					Screen::Unbind(p->binding);
 					if (root && _slots[p->slot].niTexture) {
 						if (Screen::Bind(ref.get(), _slots[p->slot].niTexture.get(), p->binding)) {
+							_slots[p->slot].compNeedsDraw = true;
 							p->srgb = p->binding.originalWasSRGB;
 							p->screenAspect = p->binding.screenAspect;
 						}
@@ -657,6 +756,7 @@ namespace fv
 				Screen::SaveChoice(ref.get(), { index, {}, flip, {} });
 				Screen::Unbind(b);
 				if (Screen::Bind(ref.get(), _slots[player->slot].niTexture.get(), b, std::max(index, 0))) {
+					_slots[player->slot].compNeedsDraw = true;
 					player->srgb = b.originalWasSRGB;
 					player->screenAspect = b.screenAspect;
 					Screen::SaveChoice(ref.get(), { b.candidateIndex, b.geometryName, b.flip, b.ownerIsNearby ? b.ownerKey : std::string() });
@@ -754,14 +854,22 @@ namespace fv
 				continue;
 			}
 			const bool srgb = settings.srgb < 0 ? p.srgb.load() : settings.srgb > 0;
+			const auto& b = p.binding;
+			const bool  composite = b.bound && b.composite && Compositor::Get().Ready(a_device);
+			const float letterboxAspect = composite ? 0.0f : p.screenAspect.load();
 
+			// 1) get the newest picture into the video texture
+			bool          fresh = false;
+			std::uint32_t vw = 0, vh = 0;
 			if (p.kind == SourceKind::kTestPattern) {
 				if (!paused || p.pattern.empty()) {
 					MakePattern(p.pattern, kPatternSize, kPatternSize, seconds);
-					const auto [tw, th] = FittedSize(kPatternSize, kPatternSize, p.screenAspect);
+					const auto [tw, th] = FittedSize(kPatternSize, kPatternSize, letterboxAspect);
 					if (slot.Ensure(a_device, tw, th, srgb)) {
 						slot.Upload(a_context, p.pattern.data(), kPatternSize, kPatternSize);
 						++p.framesShown;
+						fresh = true;
+						vw = vh = kPatternSize;
 					}
 				}
 			} else if (p.media) {
@@ -772,18 +880,57 @@ namespace fv
 				}
 				VideoFrame frame;
 				if (p.media->AcquireFrame(p.media->Clock(), frame)) {
-					const auto [tw, th] = FittedSize(frame.width, frame.height, p.screenAspect);
+					const auto [tw, th] = FittedSize(frame.width, frame.height, letterboxAspect);
 					if (slot.Ensure(a_device, tw, th, srgb)) {
 						slot.Upload(a_context, frame.pixels.data(), frame.width, frame.height);
 						if (p.framesShown++ == 0) {
 							log::info("{}: first video frame on screen ({}x{})", p.name, frame.width, frame.height);
 						}
+						fresh = true;
+						vw = frame.width;
+						vh = frame.height;
 					}
 					p.media->RecycleFrame(std::move(frame));
 				}
 			}
+			if (vw) {
+				p.lastVideoWidth = vw;
+				p.lastVideoHeight = vh;
+			}
 
-			slot.Patch(p.slot);
+			// 2) shared texture: paint the screen's own texture, then the video only inside the screen face
+			ID3D11ShaderResourceView* want = slot.srv.Get();
+			if (composite) {
+				auto*                     base = b.originalBase.get();
+				auto*                     baseSRV = base && base->rendererTexture ? reinterpret_cast<ID3D11ShaderResourceView*>(base->rendererTexture->srView) : nullptr;
+				std::uint32_t             bw = 1024, bh = 1024;
+				BaseSize(baseSRV, bw, bh);
+				// enough resolution that the face holds the video at roughly its own size
+				const float faceW = std::max(b.faceRects[0][2] - b.faceRects[0][0], 0.01f) * bw;
+				std::uint32_t scale = 1;
+				while (scale < 4 && faceW * scale < p.lastVideoWidth * 0.75f && bw * scale * 2 <= 4096 && bh * scale * 2 <= 4096) {
+					scale *= 2;
+				}
+				if (slot.srv && slot.EnsureComposite(a_device, bw * scale, bh * scale, srgb)) {
+					if (fresh || slot.compNeedsDraw) {
+						slot.compNeedsDraw = false;
+						std::array<Compositor::Region, 2> regions{};
+						for (int i = 0; i < b.faceCount && i < 2; ++i) {
+							regions[i] = FaceRegion(b.faceRects[i], slot.compWidth, slot.compHeight, p.screenAspect, p.lastVideoWidth, p.lastVideoHeight, b.flip);
+						}
+						Compositor::Get().Compose(a_context, slot.compRTV.Get(), slot.compWidth, slot.compHeight, baseSRV, slot.srv.Get(),
+							std::span<const Compositor::Region>(regions.data(), static_cast<std::size_t>(std::clamp(b.faceCount, 0, 2))));
+					}
+					want = slot.compSRV.Get();
+					if (!p.compositeLogged) {
+						p.compositeLogged = true;
+						log::info("{}: drawing video only inside the screen face ({}x{} texture, base {})", p.name, slot.compWidth, slot.compHeight,
+							baseSRV ? "original" : "black");
+					}
+				}
+			}
+
+			slot.Patch(p.slot, want);
 			Screen::ReapplyUV(p.binding);
 		}
 	}

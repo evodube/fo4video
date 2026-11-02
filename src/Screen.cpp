@@ -296,14 +296,34 @@ namespace fv::Screen
 		{
 			float u0{ 0 }, v0{ 0 }, u1{ 1 }, v1{ 1 };
 			bool  ok{ false };
-			float aspect{ 0.0f };  // physical width/height of the UV rectangle, 0 = unknown
+			float aspect{ 0.0f };  // physical width/height of the screen face, 0 = unknown
 		};
 
-		// Fits P = A + u*Du + v*Dv over all vertices; |Du|*(u1-u0) / |Dv|*(v1-v0) is the screen's shape.
-		float SolveAspect(const std::vector<std::array<double, 5>>& a_pts, const UVBounds& a_uv)
+		// What we learn from a mesh's vertex + triangle data.
+		struct MeshShape
+		{
+			UVBounds              all;           // UV range of the whole mesh
+			std::array<float, 4>  face[2]{};     // UV rect(s) of the screen face (front, and back if it has its own)
+			int                   faces{ 0 };
+			float                 aspect{ 0.0f };  // width/height of the screen face
+			int                   flipHint{ 0 };   // bit 0: texture v runs upwards on this face
+			bool                  partial{ false };  // screen face uses only part of the texture (frame shares it)
+		};
+
+		struct Vec3
+		{
+			double x{}, y{}, z{};
+			Vec3   operator-(const Vec3& o) const { return { x - o.x, y - o.y, z - o.z }; }
+			double Dot(const Vec3& o) const { return x * o.x + y * o.y + z * o.z; }
+			Vec3   Cross(const Vec3& o) const { return { y * o.z - z * o.y, z * o.x - x * o.z, x * o.y - y * o.x }; }
+			double Len() const { return std::sqrt(x * x + y * y + z * z); }
+		};
+
+		// Least-squares P = A + u*Du + v*Dv over the given vertices (exact for a flat, evenly mapped face).
+		bool FitUVMap(const std::vector<std::array<double, 5>>& a_pts, Vec3& a_du, Vec3& a_dv)
 		{
 			double n = 0, su = 0, sv = 0, suu = 0, suv = 0, svv = 0;
-			double b[3][3]{};  // [coord][1,u,v]
+			double b[3][3]{};
 			for (const auto& p : a_pts) {
 				const double u = p[3], v = p[4];
 				n += 1;
@@ -322,37 +342,29 @@ namespace fv::Screen
 			const double det = m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) +
 			                   m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
 			if (std::abs(det) < 1e-12) {
-				return 0.0f;
+				return false;
 			}
 			double inv[3][3];
-			inv[0][0] = (m[1][1] * m[2][2] - m[1][2] * m[2][1]) / det;
-			inv[0][1] = (m[0][2] * m[2][1] - m[0][1] * m[2][2]) / det;
-			inv[0][2] = (m[0][1] * m[1][2] - m[0][2] * m[1][1]) / det;
 			inv[1][0] = (m[1][2] * m[2][0] - m[1][0] * m[2][2]) / det;
 			inv[1][1] = (m[0][0] * m[2][2] - m[0][2] * m[2][0]) / det;
 			inv[1][2] = (m[0][2] * m[1][0] - m[0][0] * m[1][2]) / det;
 			inv[2][0] = (m[1][0] * m[2][1] - m[1][1] * m[2][0]) / det;
 			inv[2][1] = (m[0][1] * m[2][0] - m[0][0] * m[2][1]) / det;
 			inv[2][2] = (m[0][0] * m[1][1] - m[0][1] * m[1][0]) / det;
-
 			double du[3], dv[3];
 			for (int c = 0; c < 3; ++c) {
 				du[c] = inv[1][0] * b[c][0] + inv[1][1] * b[c][1] + inv[1][2] * b[c][2];
 				dv[c] = inv[2][0] * b[c][0] + inv[2][1] * b[c][1] + inv[2][2] * b[c][2];
 			}
-			const double width = std::sqrt(du[0] * du[0] + du[1] * du[1] + du[2] * du[2]) * (a_uv.u1 - a_uv.u0);
-			const double height = std::sqrt(dv[0] * dv[0] + dv[1] * dv[1] + dv[2] * dv[2]) * (a_uv.v1 - a_uv.v0);
-			if (width <= 1e-6 || height <= 1e-6) {
-				return 0.0f;
-			}
-			const double aspect = width / height;
-			return aspect > 0.15 && aspect < 7.0 ? static_cast<float>(aspect) : 0.0f;
+			a_du = { du[0], du[1], du[2] };
+			a_dv = { dv[0], dv[1], dv[2] };
+			return a_du.Len() > 1e-9 && a_dv.Len() > 1e-9;
 		}
 
-		UVBounds ReadUVBounds(RE::BSGeometry* a_geom)
+		MeshShape AnalyzeMesh(RE::BSGeometry* a_geom)
 		{
-			UVBounds out;
-			auto*    tri = a_geom ? a_geom->IsTriShape() : nullptr;
+			MeshShape out;
+			auto*     tri = a_geom ? a_geom->IsTriShape() : nullptr;
 			if (!tri) {
 				return out;
 			}
@@ -365,48 +377,190 @@ namespace fv::Screen
 				return out;
 			}
 			const std::uint32_t stride = desc.GetSize();
-			const std::uint32_t offset = desc.GetAttributeOffset(RE::BSGraphics::Vertex::Attribute::VA_TEXCOORD0);
+			const std::uint32_t uvOffset = desc.GetAttributeOffset(RE::BSGraphics::Vertex::Attribute::VA_TEXCOORD0);
 			const std::uint32_t count = tri->numVertices;
 			const bool          fullPrecision = desc.HasFlag(RE::BSGraphics::Vertex::Flags::VF_FULLPREC);
-			if (stride == 0 || offset + 4 > stride || count == 0 || (fullPrecision ? 12u : 6u) > stride) {
+			if (stride == 0 || uvOffset + 4 > stride || count == 0 || (fullPrecision ? 12u : 6u) > stride) {
 				return out;
 			}
 
+			// --- vertices ---
 			const auto*                        data = static_cast<const std::uint8_t*>(shape->vertexBuffer->data);
+			std::vector<Vec3>                  pos(count);
+			std::vector<std::array<float, 2>>  uv(count);
 			float                              u0 = FLT_MAX, v0 = FLT_MAX, u1 = -FLT_MAX, v1 = -FLT_MAX;
-			std::vector<std::array<double, 5>> points;
-			points.reserve(count);
+			double                             extent = 0;
 			for (std::uint32_t i = 0; i < count; ++i) {
 				const auto*   vert = data + static_cast<std::size_t>(i) * stride;
 				std::uint16_t h[2];
-				std::memcpy(h, vert + offset, sizeof(h));
-				const float u = HalfToFloat(h[0]);
-				const float v = HalfToFloat(h[1]);
-				if (!std::isfinite(u) || !std::isfinite(v)) {
-					continue;
-				}
-				u0 = std::min(u0, u);
-				u1 = std::max(u1, u);
-				v0 = std::min(v0, v);
-				v1 = std::max(v1, v);
-
-				float pos[3];
+				std::memcpy(h, vert + uvOffset, sizeof(h));
+				uv[i] = { HalfToFloat(h[0]), HalfToFloat(h[1]) };
 				if (fullPrecision) {
-					std::memcpy(pos, vert, sizeof(pos));
+					float f[3];
+					std::memcpy(f, vert, sizeof(f));
+					pos[i] = { f[0], f[1], f[2] };
 				} else {
 					std::uint16_t hp[3];
 					std::memcpy(hp, vert, sizeof(hp));
-					for (int c = 0; c < 3; ++c) {
-						pos[c] = HalfToFloat(hp[c]);
-					}
+					pos[i] = { HalfToFloat(hp[0]), HalfToFloat(hp[1]), HalfToFloat(hp[2]) };
 				}
-				points.push_back({ pos[0], pos[1], pos[2], u, v });
+				if (std::isfinite(uv[i][0]) && std::isfinite(uv[i][1])) {
+					u0 = std::min(u0, uv[i][0]);
+					u1 = std::max(u1, uv[i][0]);
+					v0 = std::min(v0, uv[i][1]);
+					v1 = std::max(v1, uv[i][1]);
+				}
+				extent = std::max({ extent, std::abs(pos[i].x), std::abs(pos[i].y), std::abs(pos[i].z) });
 			}
 			if (u1 - u0 < 1e-4f || v1 - v0 < 1e-4f || std::abs(u0) > 1000.f || std::abs(v1) > 1000.f) {
 				return out;
 			}
-			out = { u0, v0, u1, v1, true };
-			out.aspect = SolveAspect(points, out);
+			out.all = { u0, v0, u1, v1, true };
+
+			// --- triangles: find the biggest flat, connected face ---
+			const auto* indices = shape->indexBuffer ? static_cast<const std::uint16_t*>(shape->indexBuffer->data) : nullptr;
+			const std::uint32_t triCount = tri->numTriangles;
+			if (!indices || triCount == 0 || triCount > 200000) {
+				return out;
+			}
+
+			struct Tri
+			{
+				std::uint16_t v[3];
+				Vec3          n;
+				double        d, area;
+			};
+			std::vector<Tri> tris;
+			tris.reserve(triCount);
+			for (std::uint32_t t = 0; t < triCount; ++t) {
+				Tri tr{ { indices[t * 3], indices[t * 3 + 1], indices[t * 3 + 2] } };
+				if (tr.v[0] >= count || tr.v[1] >= count || tr.v[2] >= count) {
+					return out;  // index data doesn't look like what we expect; don't guess
+				}
+				const Vec3   n = (pos[tr.v[1]] - pos[tr.v[0]]).Cross(pos[tr.v[2]] - pos[tr.v[0]]);
+				const double len = n.Len();
+				tr.area = len * 0.5;
+				tr.n = len > 0 ? Vec3{ n.x / len, n.y / len, n.z / len } : Vec3{};
+				tr.d = tr.n.Dot(pos[tr.v[0]]);
+				tris.push_back(tr);
+			}
+
+			// union-find: same plane + sharing a vertex position
+			std::vector<std::uint32_t> parent(tris.size());
+			for (std::uint32_t i = 0; i < parent.size(); ++i) {
+				parent[i] = i;
+			}
+			auto find = [&](std::uint32_t a) {
+				while (parent[a] != a) {
+					parent[a] = parent[parent[a]];
+					a = parent[a];
+				}
+				return a;
+			};
+			const double planeEps = std::max(extent * 0.004, 0.05);
+			const double quant = std::max(extent * 1e-4, 1e-3);
+			std::unordered_map<std::uint64_t, std::vector<std::uint32_t>> byPos;
+			auto key = [&](const Vec3& p) {
+				const auto q = [&](double c) { return static_cast<std::uint64_t>(static_cast<std::int64_t>(std::llround(c / quant)) & 0x1FFFFF); };
+				return (q(p.x) << 42) | (q(p.y) << 21) | q(p.z);
+			};
+			for (std::uint32_t t = 0; t < tris.size(); ++t) {
+				if (tris[t].area <= 0) {
+					continue;
+				}
+				for (auto vi : tris[t].v) {
+					byPos[key(pos[vi])].push_back(t);
+				}
+			}
+			for (auto& [k, list] : byPos) {
+				for (std::size_t a = 1; a < list.size(); ++a) {
+					const auto& ta = tris[list[0]];
+					const auto& tb = tris[list[a]];
+					if (ta.n.Dot(tb.n) > 0.995 && std::abs(ta.d - tb.d) < planeEps) {
+						parent[find(list[a])] = find(list[0]);
+					}
+				}
+			}
+
+			std::unordered_map<std::uint32_t, double> islandArea;
+			for (std::uint32_t t = 0; t < tris.size(); ++t) {
+				if (tris[t].area > 0) {
+					islandArea[find(t)] += tris[t].area;
+				}
+			}
+			std::vector<std::pair<double, std::uint32_t>> islands;
+			for (auto& [root, area] : islandArea) {
+				islands.emplace_back(area, root);
+			}
+			std::ranges::sort(islands, std::greater{});
+			if (islands.empty()) {
+				return out;
+			}
+
+			auto islandRect = [&](std::uint32_t a_root, std::vector<std::array<double, 5>>& a_pts) {
+				std::array<float, 4> r{ FLT_MAX, FLT_MAX, -FLT_MAX, -FLT_MAX };
+				std::vector<bool>    seen(count, false);
+				for (std::uint32_t t = 0; t < tris.size(); ++t) {
+					if (tris[t].area <= 0 || find(t) != a_root) {
+						continue;
+					}
+					for (auto vi : tris[t].v) {
+						r[0] = std::min(r[0], uv[vi][0]);
+						r[1] = std::min(r[1], uv[vi][1]);
+						r[2] = std::max(r[2], uv[vi][0]);
+						r[3] = std::max(r[3], uv[vi][1]);
+						if (!seen[vi]) {
+							seen[vi] = true;
+							a_pts.push_back({ pos[vi].x, pos[vi].y, pos[vi].z, uv[vi][0], uv[vi][1] });
+						}
+					}
+				}
+				return r;
+			};
+
+			std::vector<std::array<double, 5>> pts;
+			out.face[0] = islandRect(islands[0].second, pts);
+			out.faces = 1;
+			if (islands.size() > 1 && islands[1].first >= islands[0].first * 0.8) {
+				std::vector<std::array<double, 5>> backPts;
+				const auto                         back = islandRect(islands[1].second, backPts);
+				const bool same = std::abs(back[0] - out.face[0][0]) < 1e-3f && std::abs(back[1] - out.face[0][1]) < 1e-3f &&
+				                  std::abs(back[2] - out.face[0][2]) < 1e-3f && std::abs(back[3] - out.face[0][3]) < 1e-3f;
+				if (!same) {
+					out.face[1] = back;
+					out.faces = 2;
+				}
+			}
+
+			const auto& f = out.face[0];
+			Vec3        du, dv;
+			if (f[2] - f[0] > 1e-4f && f[3] - f[1] > 1e-4f && FitUVMap(pts, du, dv)) {
+				const double width = du.Len() * (f[2] - f[0]);
+				const double height = dv.Len() * (f[3] - f[1]);
+				if (width > 1e-6 && height > 1e-6) {
+					const double aspect = width / height;
+					out.aspect = aspect > 0.2 && aspect < 6.0 ? static_cast<float>(aspect) : 0.0f;
+				}
+				// which way is "up" for the picture: compare the v direction with world up
+				const auto& r = a_geom->GetWorldRotate();
+				const RE::NiPoint3 worldDv = r * RE::NiPoint3(static_cast<float>(dv.x), static_cast<float>(dv.y), static_cast<float>(dv.z));
+				const float        len = std::sqrt(worldDv.x * worldDv.x + worldDv.y * worldDv.y + worldDv.z * worldDv.z);
+				if (len > 0 && worldDv.z / len > 0.5f) {
+					out.flipHint |= 1;  // v increases upwards: texture rows would be upside down
+				}
+			}
+
+			const float meshArea = (u1 - u0) * (v1 - v0);
+			const float faceArea = (f[2] - f[0]) * (f[3] - f[1]);
+			out.partial = faceArea > 0 && faceArea < meshArea * 0.85f;
+			return out;
+		}
+
+		UVBounds ReadUVBounds(RE::BSGeometry* a_geom)
+		{
+			const auto shape = AnalyzeMesh(a_geom);
+			UVBounds   out = shape.all;
+			out.aspect = shape.aspect;
 			return out;
 		}
 
@@ -754,28 +908,62 @@ namespace fv::Screen
 			prop->controllers.reset();
 		}
 
-		// map the mesh's UV range onto the whole video
-		const int flip = a_forceIndex >= 0 || saved.index >= 0 ? saved.flip : 0;
-		UVBounds  uv{};
-		if (settings.fitUV) {
-			uv = ReadUVBounds(geom);
+		// work out the screen face, which way is up, and whether the frame shares the texture
+		const auto shape = AnalyzeMesh(geom);
+		const int  userFlip = a_forceIndex >= 0 || saved.index >= 0 ? saved.flip : 0;
+		const int  flip = (userFlip ^ shape.flipHint) & 3;
+		const auto inTexture = [](const std::array<float, 4>& r) { return r[0] >= -0.01f && r[1] >= -0.01f && r[2] <= 1.01f && r[3] <= 1.01f; };
+		a_binding.composite = settings.composite && shape.partial && shape.faces > 0 && inTexture(shape.face[0]) &&
+		                      (shape.faces < 2 || inTexture(shape.face[1]));
+		a_binding.screenAspect = shape.aspect;
+		a_binding.faceCount = shape.faces;
+		for (int i = 0; i < 2; ++i) {
+			a_binding.faceRects[i] = shape.face[i];
+		}
+
+		if (!a_binding.composite && settings.fitUV) {
+			// map the mesh's UV range onto the whole video (shader does: uv' = uv * scale + offset)
 			float u0 = 0, v0 = 0, u1 = 1, v1 = 1;
-			if (uv.ok) {
-				u0 = uv.u0;
-				v0 = uv.v0;
-				u1 = uv.u1;
-				v1 = uv.v1;
+			if (shape.all.ok) {
+				u0 = shape.all.u0;
+				v0 = shape.all.v0;
+				u1 = shape.all.u1;
+				v1 = shape.all.v1;
 			}
-			// shader does: uv' = uv * scale + offset
-			const bool flipV = (flip & 1) != 0;
-			const bool flipU = (flip & 2) != 0;
+			const bool  flipV = (flip & 1) != 0;
+			const bool  flipU = (flip & 2) != 0;
 			const float su = 1.0f / (u1 - u0);
 			const float sv = 1.0f / (v1 - v0);
 			a_binding.uvScale = { flipU ? -su : su, flipV ? -sv : sv };
 			a_binding.uvOffset = { flipU ? u1 * su : -u0 * su, flipV ? v1 * sv : -v0 * sv };
+			a_binding.overrideUV = true;
 			for (int i = 0; i < 2; ++i) {
 				mat->texCoordOffset[i] = a_binding.uvOffset;
 				mat->texCoordScale[i] = a_binding.uvScale;
+			}
+		}
+
+		// effect screens that colour their texture through a palette would tint the video
+		if (a_binding.isEffect) {
+			a_binding.originalFlags = prop->flags.underlying();
+			prop->SetFlag(RE::BSShaderProperty::EShaderPropertyFlag::kGrayscaleToPaletteColor, false);
+			prop->SetFlag(RE::BSShaderProperty::EShaderPropertyFlag::kGrayscaleToPaletteAlpha, false);
+			a_binding.flagsChanged = true;
+		}
+
+		// films made of stacked layers (Far Harbor's drive-in movie): hide the other layers while we play
+		if (a_binding.isEffect && geom->parent) {
+			const auto prefix = candidates[index].name.substr(0, candidates[index].name.find(':'));
+			for (auto& child : geom->parent->children) {
+				auto* other = child ? child->IsGeometry() : nullptr;
+				if (!other || other == geom || other->GetAppCulled()) {
+					continue;  // bit 0 = already app-culled (hidden)
+				}
+				const auto otherName = Str(other->name);
+				if (!prefix.empty() && otherName.substr(0, otherName.find(':')) == prefix) {
+					other->SetAppCulled(true);
+					a_binding.hiddenLayers.emplace_back(other);
+				}
 			}
 		}
 
@@ -783,7 +971,6 @@ namespace fv::Screen
 		a_binding.ownerKey = candidates[index].ownerKey;
 		a_binding.ownerIsNearby = candidates[index].nearby;
 		a_binding.root = RE::NiPointer<RE::NiAVObject>(candidates[index].root);
-		a_binding.screenAspect = uv.ok ? uv.aspect : ReadUVBounds(geom).aspect;
 		a_binding.geometry = RE::NiPointer<RE::BSGeometry>(geom);
 		a_binding.material = mat;
 		a_binding.slotTexture = RE::NiPointer<RE::NiTexture>(a_slotTexture);
@@ -793,13 +980,14 @@ namespace fv::Screen
 		a_binding.geometryName = candidates[index].name;
 		a_binding.bound = true;
 
-		log::info("{}: bound mesh {}/{} '{}'{} ({} shader{}, texture '{}', sRGB={}, uv {} [{:.3f},{:.3f}]-[{:.3f},{:.3f}], aspect {:.2f}, flip {}, controllers {})",
+		log::info("{}: bound mesh {}/{} '{}'{} ({} shader{}, texture '{}', sRGB={}, mesh uv [{:.3f},{:.3f}]-[{:.3f},{:.3f}], screen face {} [{:.3f},{:.3f}]-[{:.3f},{:.3f}], {}, aspect {:.2f}, flip {} (auto {}), controllers {}, hidden layers {})",
 			RefName(a_ref), index + 1, count, candidates[index].name,
 			candidates[index].nearby ? std::format(" of nearby {}", RefName(candidates[index].owner)) : std::string(), a_binding.isEffect ? "effect" : "lighting",
 			a_binding.hadGlow ? " + glowmap" : "",
 			a_binding.originalBase ? std::string(a_binding.originalBase->GetName()) : std::string("<none>"), a_binding.originalWasSRGB,
-			settings.fitUV ? (uv.ok ? "fit" : "unread") : "untouched", uv.u0, uv.v0, uv.u1, uv.v1, a_binding.screenAspect, flip,
-			a_binding.savedControllers ? "stopped" : "none");
+			shape.all.u0, shape.all.v0, shape.all.u1, shape.all.v1, shape.faces, shape.face[0][0], shape.face[0][1], shape.face[0][2], shape.face[0][3],
+			a_binding.composite ? "video only inside the face" : (a_binding.overrideUV ? "video over whole mesh" : "uv untouched"), a_binding.screenAspect,
+			flip, shape.flipHint, a_binding.savedControllers ? "stopped" : "none", a_binding.hiddenLayers.size());
 		return true;
 	}
 
@@ -831,6 +1019,18 @@ namespace fv::Screen
 			}
 			if (a_binding.savedControllers && !prop->controllers) {
 				prop->controllers = a_binding.savedControllers;
+			}
+			if (a_binding.flagsChanged) {
+				const auto had = [&](RE::BSShaderProperty::EShaderPropertyFlag f) {
+					return (a_binding.originalFlags & static_cast<std::uint64_t>(f)) != 0;
+				};
+				prop->SetFlag(RE::BSShaderProperty::EShaderPropertyFlag::kGrayscaleToPaletteColor, had(RE::BSShaderProperty::EShaderPropertyFlag::kGrayscaleToPaletteColor));
+				prop->SetFlag(RE::BSShaderProperty::EShaderPropertyFlag::kGrayscaleToPaletteAlpha, had(RE::BSShaderProperty::EShaderPropertyFlag::kGrayscaleToPaletteAlpha));
+			}
+		}
+		for (auto& layer : a_binding.hiddenLayers) {
+			if (layer) {
+				layer->SetAppCulled(false);
 			}
 		}
 		if (a_binding.material) {
@@ -873,7 +1073,7 @@ namespace fv::Screen
 
 	void ReapplyUV(const ScreenBinding& a_binding)
 	{
-		if (!a_binding.bound || !a_binding.material || !Settings::Get().fitUV) {
+		if (!a_binding.bound || !a_binding.material || !a_binding.overrideUV) {
 			return;
 		}
 		auto* mat = a_binding.material;
@@ -902,11 +1102,13 @@ namespace fv::Screen
 			const auto& c = candidates[i];
 			auto*       prop = GetShaderProperty(c.geom);
 			auto*       mat = prop->material;
+			const auto  shape = AnalyzeMesh(c.geom);
 			const auto  uv = ReadUVBounds(c.geom);
-			log::info("  [{}]{}{} '{}' path='{}' shader={} score={} tex='{}' meshUV={} [{:.3f},{:.3f}]-[{:.3f},{:.3f}] aspect={:.2f} matUV off=({:.2f},{:.2f}) scale=({:.2f},{:.2f}) controllers={}",
+			log::info("  [{}]{}{} '{}' path='{}' shader={} score={} tex='{}' meshUV={} [{:.3f},{:.3f}]-[{:.3f},{:.3f}] face={} [{:.3f},{:.3f}]-[{:.3f},{:.3f}]{} aspect={:.2f} matUV off=({:.2f},{:.2f}) scale=({:.2f},{:.2f}) controllers={}",
 				i + 1, i == best ? " <== auto pick" : "", c.nearby ? std::format(" (nearby {} {})", RefName(c.owner), c.ownerKey) : std::string(), c.name, c.pathLower,
 				mat->GetType() == RE::BSShaderMaterial::Type::kEffect ? "effect" : std::format("lighting/{}", static_cast<int>(mat->GetFeature())),
-				Score(c), BaseTextureName(prop), uv.ok ? "ok" : "n/a", uv.u0, uv.v0, uv.u1, uv.v1, uv.aspect,
+				Score(c), BaseTextureName(prop), uv.ok ? "ok" : "n/a", uv.u0, uv.v0, uv.u1, uv.v1, shape.faces, shape.face[0][0], shape.face[0][1],
+				shape.face[0][2], shape.face[0][3], shape.partial ? " (part of texture)" : "", uv.aspect,
 				mat->texCoordOffset[0].x, mat->texCoordOffset[0].y, mat->texCoordScale[0].x, mat->texCoordScale[0].y,
 				prop->controllers ? "yes" : "no");
 		}

@@ -104,6 +104,7 @@ namespace fv
 		fitUV = ReadBool(L"Screen", L"bFitVideoToScreen", fitUV);
 		stopScreenAnimation = ReadBool(L"Screen", L"bStopScreenAnimation", stopScreenAnimation);
 		aspectMode = std::clamp(ReadInt(L"Screen", L"iAspectMode", aspectMode), 0, 1);
+		composite = ReadBool(L"Screen", L"bOnlyInsideScreenArea", composite);
 		nearbyRadius = std::max(0.0f, ReadFloat(L"Screen", L"fNearbyObjectRadius", nearbyRadius));
 		brightness = ReadFloat(L"Screen", L"fBrightness", brightness);
 		placeholderPrefix = Narrow(ReadString(L"Screen", L"sPlaceholderPrefix", L""));
@@ -115,8 +116,8 @@ namespace fv
 
 		log::info("settings: hotkeys={} play=0x{:X} test=0x{:X} stop=0x{:X} dump=0x{:X} mesh=0x{:X} loop={} pause={} maxScreens={}",
 			enableHotkeys, keyPlay, keyTestPattern, keyStop, keyDump, keyNextMesh, loop, pauseInMenus, maxScreens);
-		log::info("settings: screenNames=[{}] forceNode='{}' srgb={} fitUV={} stopAnim={} aspect={} nearby={:.0f} audio={} volume={:.2f} dist={:.0f}-{:.0f}",
+		log::info("settings: screenNames=[{}] forceNode='{}' srgb={} fitUV={} stopAnim={} aspect={} inside={} nearby={:.0f} audio={} volume={:.2f} dist={:.0f}-{:.0f}",
 			[&] { std::string s; for (auto& n : screenNames) { if (!s.empty()) s += ","; s += n; } return s; }(),
-			forceNode, srgb, fitUV, stopScreenAnimation, aspectMode, nearbyRadius, enableAudio, volume, minDistance, maxDistance);
+			forceNode, srgb, fitUV, stopScreenAnimation, aspectMode, composite, nearbyRadius, enableAudio, volume, minDistance, maxDistance);
 	}
 }

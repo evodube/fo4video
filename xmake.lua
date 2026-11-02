@@ -3,7 +3,7 @@
 includes("lib/commonlibf4")
 
 set_project("RealVideos")
-set_version("0.4.0")
+set_version("0.5.0")
 set_license("GPL-3.0")
 set_languages("c++23")
 set_warnings("allextra")
@@ -54,7 +54,7 @@ target("RealVideos", function()
         "/wd5054"  -- enum bitwise ops
     )
 
-    add_syslinks("mfplat", "mfreadwrite", "mfuuid", "ole32", "xaudio2", "d3d11", "dxgi", "user32", "kernel32")
+    add_syslinks("mfplat", "mfreadwrite", "mfuuid", "ole32", "xaudio2", "d3d11", "d3dcompiler", "dxgi", "user32", "kernel32")
 
     set_pcxxheader("src/PCH.h")
     set_runtimes("MD")

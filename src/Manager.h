@@ -23,9 +23,19 @@ namespace fv
 		ID3D11ShaderResourceView* installedSRV{ nullptr };
 		bool                      refusedLogged{ false };
 
+		// composite target (screen texture + video), used when the frame shares the screen's texture
+		ComPtr<ID3D11Texture2D>          compTexture;
+		ComPtr<ID3D11RenderTargetView>   compRTV;
+		ComPtr<ID3D11ShaderResourceView> compSRV;
+		std::uint32_t                    compWidth{ 0 };
+		std::uint32_t                    compHeight{ 0 };
+		bool                             compSRGB{ false };
+		bool                             compNeedsDraw{ false };
+
 		bool Ensure(ID3D11Device* a_device, std::uint32_t a_width, std::uint32_t a_height, bool a_srgb);
+		bool EnsureComposite(ID3D11Device* a_device, std::uint32_t a_width, std::uint32_t a_height, bool a_srgb);
 		void Upload(ID3D11DeviceContext* a_context, const std::uint8_t* a_pixels, std::uint32_t a_width, std::uint32_t a_height);
-		void Patch(int a_index);
+		void Patch(int a_index, ID3D11ShaderResourceView* a_want);
 		void Unpatch();
 		void Release();
 	};
@@ -56,6 +66,9 @@ namespace fv
 		std::atomic<bool>  stopping{ false };
 		std::uint64_t      framesShown{ 0 };
 		int                rebindCooldown{ 0 };
+		std::uint32_t      lastVideoWidth{ 0 };
+		std::uint32_t      lastVideoHeight{ 0 };
+		bool               compositeLogged{ false };
 	};
 
 	class Manager

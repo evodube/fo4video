@@ -39,7 +39,14 @@ namespace fv
 		std::string                         geometryName;
 		bool                                bound{ false };
 		bool                                originalWasSRGB{ false };
-		float                               screenAspect{ 0.0f };  // width / height of the mesh in UV space, 0 = unknown
+		float                               screenAspect{ 0.0f };  // width / height of the screen face, 0 = unknown
+		bool                                overrideUV{ false };   // we remap the mesh UVs (whole-mesh mode)
+		bool                                composite{ false };    // video drawn only into faceRects of the original texture
+		std::array<float, 4>                faceRects[2]{};        // u0, v0, u1, v1
+		int                                 faceCount{ 0 };
+		std::uint64_t                       originalFlags{ 0 };
+		bool                                flagsChanged{ false };
+		std::vector<RE::NiPointer<RE::NiAVObject>> hiddenLayers;
 	};
 
 	namespace Screen
