@@ -1064,11 +1064,6 @@ namespace fv::Screen
 			return ContainsAny(tex, { "moviefx", "moviestill", "drivein\\effects", "drivein/effects" });
 		}
 
-			RE::BSGeometry*    geom{ nullptr };
-			std::string        name;
-			std::string        pathLower;
-		};
-
 		// Refs with 3D within a_radius of a_center, in every loaded cell.
 		std::vector<RE::TESObjectREFR*> RefsAround(const RE::NiPoint3& a_center, float a_radius)
 		{
