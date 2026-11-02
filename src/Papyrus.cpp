@@ -30,7 +30,7 @@ namespace fv::Papyrus
 
 		RE::ObjectRefHandle Handle(RE::TESObjectREFR* a_ref)
 		{
-			return a_ref ? RE::ObjectRefHandle(a_ref) : RE::ObjectRefHandle{};
+			return a_ref ? a_ref->GetHandle() : RE::ObjectRefHandle{};
 		}
 
 		bool Play(std::monostate, RE::TESObjectREFR* a_screen, std::string a_file, bool a_loop)

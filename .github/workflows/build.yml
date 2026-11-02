@@ -31,7 +31,7 @@ jobs:
         run: xmake f -m releasedbg -y
 
       - name: Build
-        run: xmake build -y -v fo4video
+        run: xmake build -y fo4video
 
       - name: Package
         shell: pwsh

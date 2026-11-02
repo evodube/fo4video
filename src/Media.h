@@ -77,10 +77,10 @@ namespace fv
 		std::uint64_t                _samplesBase{ 0 };
 
 		// clock (used when there is no audio)
-		using clock_t = std::chrono::steady_clock;
-		clock_t::time_point _wallStart{};
-		clock_t::time_point _pauseStart{};
-		clock_t::duration   _pausedTotal{};
+		using steady_t = std::chrono::steady_clock;
+		steady_t::time_point _wallStart{};
+		steady_t::time_point _pauseStart{};
+		steady_t::duration   _pausedTotal{};
 		bool                _paused{ false };
 
 		// threads

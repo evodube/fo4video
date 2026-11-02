@@ -322,7 +322,7 @@ namespace fv
 		}
 
 		auto player = std::make_unique<Player>();
-		player->ref = RE::ObjectRefHandle(a_ref);
+		player->ref = a_ref->GetHandle();
 		player->formID = a_ref->GetFormID();
 		player->name = refName;
 		player->slot = slot;

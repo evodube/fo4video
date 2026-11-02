@@ -202,7 +202,7 @@ namespace fv
 			return;
 		}
 		_stop = false;
-		_wallStart = clock_t::now();
+		_wallStart = steady_t::now();
 		_pausedTotal = {};
 		if (_paused) {
 			_pauseStart = _wallStart;
@@ -275,7 +275,7 @@ namespace fv
 	std::int64_t MediaSource::Clock() const
 	{
 		const auto wall = [this]() -> std::int64_t {
-			const auto now = _paused ? _pauseStart : clock_t::now();
+			const auto now = _paused ? _pauseStart : steady_t::now();
 			const auto elapsed = now - _wallStart - _pausedTotal;
 			return std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count() / 100;
 		};
@@ -300,12 +300,12 @@ namespace fv
 		}
 		_paused = a_paused;
 		if (a_paused) {
-			_pauseStart = clock_t::now();
+			_pauseStart = steady_t::now();
 			if (_audio) {
 				_audio->Pause();
 			}
 		} else {
-			_pausedTotal += clock_t::now() - _pauseStart;
+			_pausedTotal += steady_t::now() - _pauseStart;
 			if (_audio && _running) {
 				_audio->Start();
 			}
