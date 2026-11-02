@@ -43,6 +43,8 @@ namespace fv
 		bool                                overrideUV{ false };   // we remap the mesh UVs (whole-mesh mode)
 		bool                                composite{ false };    // video drawn only into faceRects of the original texture
 		std::array<float, 4>                faceRects[2]{};        // u0, v0, u1, v1
+		float                               faceAspect[2]{};       // width/height of each face as seen from the front
+		int                                 faceOrient[2]{};       // bit 0 flip vertical, bit 1 mirror, bit 2 rotated 90
 		int                                 faceCount{ 0 };
 		std::uint64_t                       originalFlags{ 0 };
 		bool                                flagsChanged{ false };

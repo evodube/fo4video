@@ -10,7 +10,8 @@ namespace fv
 cbuffer Params : register(b0)
 {
 	float4 dst;    // x0, y0, x1, y1 in clip space
-	float4 uvs;    // u0, v0, u1, v1
+	float4 mapU;   // ou, au, bu, -
+	float4 mapV;   // ov, av, bv, -
 };
 Texture2D    tex : register(t0);
 SamplerState smp : register(s0);
@@ -26,7 +27,7 @@ VSOut VSMain(uint id : SV_VertexID)
 	float2 t = float2(id & 1, id >> 1);
 	VSOut o;
 	o.pos = float4(lerp(dst.x, dst.z, t.x), lerp(dst.y, dst.w, t.y), 0.0, 1.0);
-	o.uv  = float2(lerp(uvs.x, uvs.z, t.x), lerp(uvs.y, uvs.w, t.y));
+	o.uv  = float2(mapU.x + mapU.y * t.x + mapU.z * t.y, mapV.x + mapV.y * t.x + mapV.z * t.y);
 	return o;
 }
 
@@ -39,7 +40,8 @@ float4 PSMain(VSOut i) : SV_Target
 		struct Params
 		{
 			float dst[4];
-			float uvs[4];
+			float mapU[4];
+			float mapV[4];
 		};
 
 		// Everything Compose() changes, captured and put back afterwards (the game caches its D3D state).
@@ -251,10 +253,14 @@ float4 PSMain(VSOut i) : SV_Target
 		p->dst[1] = 1.0f - a_region.y0 / h * 2.0f;
 		p->dst[2] = a_region.x1 / w * 2.0f - 1.0f;
 		p->dst[3] = 1.0f - a_region.y1 / h * 2.0f;
-		p->uvs[0] = a_region.u0;
-		p->uvs[1] = a_region.v0;
-		p->uvs[2] = a_region.u1;
-		p->uvs[3] = a_region.v1;
+		p->mapU[0] = a_region.ou;
+		p->mapU[1] = a_region.au;
+		p->mapU[2] = a_region.bu;
+		p->mapU[3] = 0.0f;
+		p->mapV[0] = a_region.ov;
+		p->mapV[1] = a_region.av;
+		p->mapV[2] = a_region.bv;
+		p->mapV[3] = 0.0f;
 		a_context->Unmap(_cb.Get(), 0);
 
 		a_context->PSSetShaderResources(0, 1, &a_srv);
@@ -296,7 +302,7 @@ float4 PSMain(VSOut i) : SV_Target
 		a_context->VSSetConstantBuffers(0, 1, &cb);
 
 		if (a_base) {
-			Draw(a_context, a_width, a_height, { 0, 0, static_cast<float>(a_width), static_cast<float>(a_height), 0, 0, 1, 1 }, a_base, _clamp.Get());
+			Draw(a_context, a_width, a_height, Region{ 0, 0, static_cast<float>(a_width), static_cast<float>(a_height) }, a_base, _clamp.Get());
 		} else {
 			const float black[4]{ 0, 0, 0, 1 };
 			a_context->ClearRenderTargetView(a_target, black);

@@ -52,6 +52,20 @@ namespace fv::Screen
 			return netimmerse_cast<RE::BSShaderProperty*>(a_geom->properties[1].get());
 		}
 
+		// The renderer caches each mesh's draw commands (including which textures to bind). After changing the
+		// material we make the engine rebuild them, otherwise some objects keep drawing the old texture.
+		void RebuildRenderPasses(RE::BSShaderProperty* a_prop)
+		{
+			if (!a_prop) {
+				return;
+			}
+			using F = RE::BSShaderProperty::EShaderPropertyFlag;
+			const bool twoSided = a_prop->flags.all(F::kTwoSided);
+			a_prop->SetFlag(F::kTwoSided, !twoSided);  // any flag change marks the pass cache dirty
+			a_prop->SetFlag(F::kTwoSided, twoSided);
+			a_prop->lastRenderPassState = std::numeric_limits<std::int32_t>::max();
+		}
+
 		RE::NiPointer<RE::NiTexture>& GlowTexture(RE::BSShaderMaterial* a_material)
 		{
 			// BSLightingShaderMaterialGlowmap::spGlowMapTexture at 0xC0 (per F4SE 0.6.23)
@@ -245,6 +259,15 @@ namespace fv::Screen
 			return score;
 		}
 
+		// Surfaces made to show moving pictures (VotW screens, TV animations, film reels, Far Harbor's drive-in movie).
+		bool HasVideoHint(const Candidate& a_c)
+		{
+			const auto texLower = Lower(BaseTextureName(GetShaderProperty(a_c.geom)));
+			const auto nameLower = Lower(a_c.name);
+			return ContainsAny(texLower, { "votw", "tvanim", "standby", "film", "reel", "movie" }) ||
+			       ContainsAny(nameLower, { "film", "movie", "projection" }) || ContainsAny(a_c.pathLower, { "movie" });
+		}
+
 		int BestCandidate(const std::vector<Candidate>& a_candidates)
 		{
 			int best = -1;
@@ -306,7 +329,9 @@ namespace fv::Screen
 			std::array<float, 4>  face[2]{};     // UV rect(s) of the screen face (front, and back if it has its own)
 			int                   faces{ 0 };
 			float                 aspect{ 0.0f };  // width/height of the screen face
-			int                   flipHint{ 0 };   // bit 0: texture v runs upwards on this face
+			int                   flipHint{ 0 };   // orientation of face 0: bit 0 flip vertical, bit 1 mirror, bit 2 rotated 90
+			float                 faceAspect[2]{};  // width/height of each face as the viewer sees it
+			int                   faceOrient[2]{};  // orientation bits per face (see flipHint)
 			bool                  partial{ false };  // screen face uses only part of the texture (frame shares it)
 		};
 
@@ -386,6 +411,9 @@ namespace fv::Screen
 
 			// --- vertices ---
 			const auto*                        data = static_cast<const std::uint8_t*>(shape->vertexBuffer->data);
+			const bool                         hasNormals = desc.HasFlag(RE::BSGraphics::Vertex::Flags::VF_NORMAL);
+			const std::uint32_t                nOffset = desc.GetAttributeOffset(RE::BSGraphics::Vertex::Attribute::VA_NORMAL);
+			std::vector<Vec3>                  nrm(count);
 			std::vector<Vec3>                  pos(count);
 			std::vector<std::array<float, 2>>  uv(count);
 			float                              u0 = FLT_MAX, v0 = FLT_MAX, u1 = -FLT_MAX, v1 = -FLT_MAX;
@@ -403,6 +431,10 @@ namespace fv::Screen
 					std::uint16_t hp[3];
 					std::memcpy(hp, vert, sizeof(hp));
 					pos[i] = { HalfToFloat(hp[0]), HalfToFloat(hp[1]), HalfToFloat(hp[2]) };
+				}
+				if (hasNormals && nOffset + 3 <= stride) {
+					const auto* nb = vert + nOffset;
+					nrm[i] = { nb[0] / 127.5 - 1.0, nb[1] / 127.5 - 1.0, nb[2] / 127.5 - 1.0 };
 				}
 				if (std::isfinite(uv[i][0]) && std::isfinite(uv[i][1])) {
 					u0 = std::min(u0, uv[i][0]);
@@ -518,38 +550,105 @@ namespace fv::Screen
 				return r;
 			};
 
-			std::vector<std::array<double, 5>> pts;
-			out.face[0] = islandRect(islands[0].second, pts);
-			out.faces = 1;
-			if (islands.size() > 1 && islands[1].first >= islands[0].first * 0.8) {
-				std::vector<std::array<double, 5>> backPts;
-				const auto                         back = islandRect(islands[1].second, backPts);
-				const bool same = std::abs(back[0] - out.face[0][0]) < 1e-3f && std::abs(back[1] - out.face[0][1]) < 1e-3f &&
-				                  std::abs(back[2] - out.face[0][2]) < 1e-3f && std::abs(back[3] - out.face[0][3]) < 1e-3f;
-				if (!same) {
-					out.face[1] = back;
-					out.faces = 2;
+			// Orientation of a face for someone standing in front of it: which texture axis is the picture's
+			// horizontal, and whether it runs left-to-right / top-to-bottom.
+			const auto& rot = a_geom->GetWorldRotate();
+			auto toWorld = [&](const Vec3& v) {
+				const RE::NiPoint3 w = rot * RE::NiPoint3(static_cast<float>(v.x), static_cast<float>(v.y), static_cast<float>(v.z));
+				return Vec3{ w.x, w.y, w.z };
+			};
+			auto normalize = [](Vec3 v) {
+				const double l = v.Len();
+				return l > 1e-9 ? Vec3{ v.x / l, v.y / l, v.z / l } : Vec3{};
+			};
+			auto orientFace = [&](std::uint32_t a_root, const std::array<float, 4>& a_rect, const std::vector<std::array<double, 5>>& a_pts,
+								  float& a_aspect, int& a_orient) {
+				a_aspect = 0.0f;
+				a_orient = 0;
+				Vec3 du, dv;
+				if (a_rect[2] - a_rect[0] < 1e-4f || a_rect[3] - a_rect[1] < 1e-4f || !FitUVMap(a_pts, du, dv)) {
+					return;
 				}
-			}
+				// outward normal: average vertex normal if the mesh has them, else the triangle winding
+				Vec3 n{};
+				for (std::uint32_t t = 0; t < tris.size(); ++t) {
+					if (tris[t].area > 0 && find(t) == a_root) {
+						for (auto vi : tris[t].v) {
+							n = { n.x + nrm[vi].x, n.y + nrm[vi].y, n.z + nrm[vi].z };
+						}
+					}
+				}
+				if (n.Len() < 1e-6) {
+					n = du.Cross(dv);
+				}
+				const Vec3 N = normalize(toWorld(n));
+				const Vec3 Du = toWorld(du), Dv = toWorld(dv);
+				const Vec3 up{ 0, 0, 1 };
+				const Vec3 forward{ -N.x, -N.y, -N.z };  // the viewer looks into the face
+				Vec3       right = normalize(forward.Cross(up));
+				if (right.Len() < 0.5) {
+					right = normalize(Du);  // face is flat on the floor/ceiling: keep the texture's own axes
+				}
+				const Vec3 down = normalize(forward.Cross(right));  // = -(right x forward)
 
-			const auto& f = out.face[0];
-			Vec3        du, dv;
-			if (f[2] - f[0] > 1e-4f && f[3] - f[1] > 1e-4f && FitUVMap(pts, du, dv)) {
-				const double width = du.Len() * (f[2] - f[0]);
-				const double height = dv.Len() * (f[3] - f[1]);
+				const bool swap = std::abs(Du.Dot(right)) < std::abs(Dv.Dot(right));
+				const Vec3 hAxis = swap ? Dv : Du;  // texture axis that runs left-right on screen
+				const Vec3 vAxis = swap ? Du : Dv;
+				if (hAxis.Dot(right) < 0) {
+					a_orient |= 2;
+				}
+				if (vAxis.Dot(down) < 0) {
+					a_orient |= 1;
+				}
+				if (swap) {
+					a_orient |= 4;
+				}
+				const double spanH = swap ? (a_rect[3] - a_rect[1]) : (a_rect[2] - a_rect[0]);
+				const double spanV = swap ? (a_rect[2] - a_rect[0]) : (a_rect[3] - a_rect[1]);
+				const double width = hAxis.Len() * spanH;
+				const double height = vAxis.Len() * spanV;
 				if (width > 1e-6 && height > 1e-6) {
 					const double aspect = width / height;
-					out.aspect = aspect > 0.2 && aspect < 6.0 ? static_cast<float>(aspect) : 0.0f;
+					a_aspect = aspect > 0.2 && aspect < 6.0 ? static_cast<float>(aspect) : 0.0f;
 				}
-				// which way is "up" for the picture: compare the v direction with world up
-				const auto& r = a_geom->GetWorldRotate();
-				const RE::NiPoint3 worldDv = r * RE::NiPoint3(static_cast<float>(dv.x), static_cast<float>(dv.y), static_cast<float>(dv.z));
-				const float        len = std::sqrt(worldDv.x * worldDv.x + worldDv.y * worldDv.y + worldDv.z * worldDv.z);
-				if (len > 0 && worldDv.z / len > 0.5f) {
-					out.flipHint |= 1;  // v increases upwards: texture rows would be upside down
-				}
-			}
+			};
 
+			// the largest flat face, plus any other big face parallel to it (the back, or a front split from it)
+			auto islandNormal = [&](std::uint32_t a_root) {
+				for (std::uint32_t t = 0; t < tris.size(); ++t) {
+					if (tris[t].area > 0 && find(t) == a_root) {
+						return tris[t].n;
+					}
+				}
+				return Vec3{};
+			};
+			const Vec3 mainNormal = islandNormal(islands[0].second);
+			for (std::size_t i = 0; i < islands.size() && out.faces < 2; ++i) {
+				if (islands[i].first < islands[0].first * 0.5) {
+					break;
+				}
+				if (i > 0 && std::abs(islandNormal(islands[i].second).Dot(mainNormal)) < 0.95) {
+					continue;
+				}
+				std::vector<std::array<double, 5>> pts;
+				const auto                         rect = islandRect(islands[i].second, pts);
+				bool                               duplicate = false;
+				for (int k = 0; k < out.faces; ++k) {
+					const auto& o = out.face[k];
+					duplicate |= std::abs(rect[0] - o[0]) < 1e-3f && std::abs(rect[1] - o[1]) < 1e-3f && std::abs(rect[2] - o[2]) < 1e-3f &&
+					             std::abs(rect[3] - o[3]) < 1e-3f;
+				}
+				if (duplicate) {
+					continue;
+				}
+				const int k = out.faces++;
+				out.face[k] = rect;
+				orientFace(islands[i].second, rect, pts, out.faceAspect[k], out.faceOrient[k]);
+			}
+			out.aspect = out.faceAspect[0];
+			out.flipHint = out.faceOrient[0];
+
+			const auto& f = out.face[0];
 			const float meshArea = (u1 - u0) * (v1 - v0);
 			const float faceArea = (f[2] - f[0]) * (f[3] - f[1]);
 			out.partial = faceArea > 0 && faceArea < meshArea * 0.85f;
@@ -726,7 +825,7 @@ namespace fv::Screen
 			return choice;
 		}
 		char buf[512]{};
-		::GetPrivateProfileStringA("Screens.v3", key.c_str(), "", buf, sizeof(buf), kChoiceIni);
+		::GetPrivateProfileStringA("Screens.v4", key.c_str(), "", buf, sizeof(buf), kChoiceIni);
 		const std::string value = buf;
 		if (value.empty()) {
 			return choice;
@@ -769,7 +868,7 @@ namespace fv::Screen
 		auto owner = a_choice.owner;
 		std::ranges::replace(owner, '|', '/');
 		const auto value = std::format("{}|{}|{}|{}", a_choice.index, a_choice.name, a_choice.flip, owner);
-		::WritePrivateProfileStringA("Screens.v3", key.c_str(), value.c_str(), kChoiceIni);
+		::WritePrivateProfileStringA("Screens.v4", key.c_str(), value.c_str(), kChoiceIni);
 		log::info("saved screen choice for {}: {}", key, value);
 	}
 
@@ -821,6 +920,9 @@ namespace fv::Screen
 				}
 			}
 		}
+		if (index >= 0 && a_forceIndex < 0 && !candidates[index].nearby && Score(candidates[index]) < 0) {
+			index = -1;  // an old choice of a light beam or similar: pick again
+		}
 		if (index < 0 && !settings.forceNode.empty()) {
 			for (int i = 0; i < count; ++i) {
 				if (candidates[i].nearby) {
@@ -835,12 +937,33 @@ namespace fv::Screen
 		if (index < 0) {
 			index = BestCandidate(candidates);
 			const int ownScore = index >= 0 ? Score(candidates[index]) : std::numeric_limits<int>::min();
-			if (ownScore < 10) {
+			const bool ownHint = index >= 0 && HasVideoHint(candidates[index]);
+			if (ownScore >= 10 && !ownHint) {
+				// a plain screen with a film/video surface right in front of it (drive-in screen + Far Harbor movie):
+				// play on the film surface
+				const auto origin = a_ref->GetPosition();
+				int        best = -1, bestScore = std::numeric_limits<int>::min();
+				for (int i = 0; i < count; ++i) {
+					const auto& c = candidates[i];
+					if (c.nearby && HasVideoHint(c) && origin.GetDistance(c.owner->GetPosition()) < 3000.0f) {
+						const int sc = Score(c);
+						if (sc > bestScore) {
+							best = i;
+							bestScore = sc;
+						}
+					}
+				}
+				if (best >= 0) {
+					log::info("{}: has a film surface in front of it, using {}", RefName(a_ref), RefName(candidates[best].owner));
+					index = best;
+				}
+			} else if (ownScore < 10) {
 				// a projector (or anything without a screen of its own): use the best screen nearby
 				int best = -1, bestScore = kScreenLike - 1;
 				for (int i = 0; i < count; ++i) {
 					if (candidates[i].nearby) {
-						const int sc = Score(candidates[i]);
+						// a film/video surface beats a plain screen behind it (Far Harbor's movie over the drive-in screen)
+						const int sc = Score(candidates[i]) + (HasVideoHint(candidates[i]) ? 100 : 0);
 						if (sc > bestScore) {
 							best = i;
 							bestScore = sc;
@@ -911,14 +1034,26 @@ namespace fv::Screen
 		// work out the screen face, which way is up, and whether the frame shares the texture
 		const auto shape = AnalyzeMesh(geom);
 		const int  userFlip = a_forceIndex >= 0 || saved.index >= 0 ? saved.flip : 0;
-		const int  flip = (userFlip ^ shape.flipHint) & 3;
+		const int  flip = ((userFlip ^ shape.flipHint) & 3) | (shape.flipHint & 4);
 		const auto inTexture = [](const std::array<float, 4>& r) { return r[0] >= -0.01f && r[1] >= -0.01f && r[2] <= 1.01f && r[3] <= 1.01f; };
-		a_binding.composite = settings.composite && shape.partial && shape.faces > 0 && inTexture(shape.face[0]) &&
-		                      (shape.faces < 2 || inTexture(shape.face[1]));
+		const std::array<float, 4> whole{ shape.all.u0, shape.all.v0, shape.all.u1, shape.all.v1 };
+		const bool facesInTexture = shape.faces > 0 && inTexture(shape.face[0]) && (shape.faces < 2 || inTexture(shape.face[1]));
+		const bool rotated = (shape.flipHint & 4) != 0;
+
 		a_binding.screenAspect = shape.aspect;
 		a_binding.faceCount = shape.faces;
 		for (int i = 0; i < 2; ++i) {
 			a_binding.faceRects[i] = shape.face[i];
+			a_binding.faceAspect[i] = shape.faceAspect[i];
+			a_binding.faceOrient[i] = ((userFlip ^ shape.faceOrient[i]) & 3) | (shape.faceOrient[i] & 4);
+		}
+		if (settings.composite && shape.partial && facesInTexture) {
+			a_binding.composite = true;  // frame shares the texture: video only inside the face(s)
+		} else if (settings.composite && rotated && shape.all.ok && inTexture(whole)) {
+			// whole mesh is the screen but its texture lies sideways: draw the video rotated
+			a_binding.composite = true;
+			a_binding.faceCount = 1;
+			a_binding.faceRects[0] = whole;
 		}
 
 		if (!a_binding.composite && settings.fitUV) {
@@ -976,7 +1111,8 @@ namespace fv::Screen
 		a_binding.slotTexture = RE::NiPointer<RE::NiTexture>(a_slotTexture);
 		a_binding.candidateIndex = index;
 		a_binding.candidateCount = count;
-		a_binding.flip = flip;
+		a_binding.flip = userFlip;
+		RebuildRenderPasses(prop);
 		a_binding.geometryName = candidates[index].name;
 		a_binding.bound = true;
 
@@ -1020,6 +1156,7 @@ namespace fv::Screen
 			if (a_binding.savedControllers && !prop->controllers) {
 				prop->controllers = a_binding.savedControllers;
 			}
+			RebuildRenderPasses(prop);
 			if (a_binding.flagsChanged) {
 				const auto had = [&](RE::BSShaderProperty::EShaderPropertyFlag f) {
 					return (a_binding.originalFlags & static_cast<std::uint64_t>(f)) != 0;

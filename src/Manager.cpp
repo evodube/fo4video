@@ -137,28 +137,30 @@ namespace fv
 			return a_w > 0 && a_h > 0;
 		}
 
-		// Video coordinates for the corners of one screen face: keeps the video's shape (black bars) and orientation.
+		// How the video lands on one screen face: orientation (flip/mirror/rotate) and black bars to keep its shape.
 		Compositor::Region FaceRegion(const std::array<float, 4>& a_face, std::uint32_t a_w, std::uint32_t a_h, float a_faceAspect,
-			std::uint32_t a_videoW, std::uint32_t a_videoH, int a_flip)
+			std::uint32_t a_videoW, std::uint32_t a_videoH, int a_orient)
 		{
-			Compositor::Region r{ a_face[0] * a_w, a_face[1] * a_h, a_face[2] * a_w, a_face[3] * a_h, 0.0f, 0.0f, 1.0f, 1.0f };
+			Compositor::Region r{ a_face[0] * a_w, a_face[1] * a_h, a_face[2] * a_w, a_face[3] * a_h };
+			const bool flip = (a_orient & 1) != 0, mirror = (a_orient & 2) != 0, rotated = (a_orient & 4) != 0;
+			// tx runs along texture u, ty along texture v
+			if (!rotated) {
+				r.ou = mirror ? 1.0f : 0.0f; r.au = mirror ? -1.0f : 1.0f; r.bu = 0.0f;
+				r.ov = flip ? 1.0f : 0.0f;   r.av = 0.0f;                  r.bv = flip ? -1.0f : 1.0f;
+			} else {
+				r.ou = mirror ? 1.0f : 0.0f; r.au = 0.0f;                  r.bu = mirror ? -1.0f : 1.0f;
+				r.ov = flip ? 1.0f : 0.0f;   r.av = flip ? -1.0f : 1.0f;  r.bv = 0.0f;
+			}
 			if (Settings::Get().aspectMode == 1 && a_faceAspect > 0.0f && a_videoW && a_videoH) {
 				const float video = static_cast<float>(a_videoW) / static_cast<float>(a_videoH);
+				float       ku = 1.0f, kv = 1.0f;
 				if (video > a_faceAspect * 1.03f) {
-					const float half = 0.5f * video / a_faceAspect;  // video is wider: bars top and bottom
-					r.v0 = 0.5f - half;
-					r.v1 = 0.5f + half;
+					kv = video / a_faceAspect;  // wider video: bars top and bottom
 				} else if (video < a_faceAspect * 0.97f) {
-					const float half = 0.5f * a_faceAspect / video;  // video is narrower: bars left and right
-					r.u0 = 0.5f - half;
-					r.u1 = 0.5f + half;
+					ku = a_faceAspect / video;  // narrower video: bars left and right
 				}
-			}
-			if (a_flip & 1) {
-				std::swap(r.v0, r.v1);
-			}
-			if (a_flip & 2) {
-				std::swap(r.u0, r.u1);
+				r.ou = 0.5f + (r.ou - 0.5f) * ku; r.au *= ku; r.bu *= ku;
+				r.ov = 0.5f + (r.ov - 0.5f) * kv; r.av *= kv; r.bv *= kv;
 			}
 			return r;
 		}
@@ -916,7 +918,7 @@ namespace fv
 						slot.compNeedsDraw = false;
 						std::array<Compositor::Region, 2> regions{};
 						for (int i = 0; i < b.faceCount && i < 2; ++i) {
-							regions[i] = FaceRegion(b.faceRects[i], slot.compWidth, slot.compHeight, p.screenAspect, p.lastVideoWidth, p.lastVideoHeight, b.flip);
+							regions[i] = FaceRegion(b.faceRects[i], slot.compWidth, slot.compHeight, b.faceAspect[i], p.lastVideoWidth, p.lastVideoHeight, b.faceOrient[i]);
 						}
 						Compositor::Get().Compose(a_context, slot.compRTV.Get(), slot.compWidth, slot.compHeight, baseSRV, slot.srv.Get(),
 							std::span<const Compositor::Region>(regions.data(), static_cast<std::size_t>(std::clamp(b.faceCount, 0, 2))));

@@ -11,7 +11,10 @@ namespace fv
 		struct Region
 		{
 			float x0, y0, x1, y1;  // destination, in texture pixels (y down)
-			float u0, v0, u1, v1;  // video coordinates at the region's corners (outside 0..1 = black bar)
+			// video coordinate at local position (tx, ty) in 0..1 across the region (outside 0..1 = black bar):
+			//   u = ou + au*tx + bu*ty,   v = ov + av*tx + bv*ty
+			float ou{ 0 }, au{ 1 }, bu{ 0 };
+			float ov{ 0 }, av{ 0 }, bv{ 1 };
 		};
 
 		static Compositor& Get();
