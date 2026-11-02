@@ -4,7 +4,7 @@ namespace fv
 {
 	namespace
 	{
-		constexpr auto kIniPath = L"Data\\F4SE\\Plugins\\fo4video.ini";
+		constexpr auto kIniPath = L"Data\\F4SE\\Plugins\\RealVideos.ini";
 
 		std::wstring ReadString(const wchar_t* a_section, const wchar_t* a_key, const std::wstring& a_default)
 		{
@@ -88,9 +88,11 @@ namespace fv
 		keyTestPattern = ReadInt(L"General", L"iKeyTestPattern", keyTestPattern);
 		keyStop = ReadInt(L"General", L"iKeyStop", keyStop);
 		keyDump = ReadInt(L"General", L"iKeyDumpNodes", keyDump);
+		keyNextMesh = ReadInt(L"General", L"iKeyNextMesh", keyNextMesh);
 		videoFolder = ReadString(L"General", L"sVideoFolder", videoFolder);
 		loop = ReadBool(L"General", L"bLoop", loop);
 		pauseInMenus = ReadBool(L"General", L"bPauseInMenus", pauseInMenus);
+		pauseUnfocused = ReadBool(L"General", L"bPauseWhenAltTabbed", pauseUnfocused);
 		maxScreens = std::clamp(ReadInt(L"General", L"iMaxScreens", maxScreens), 1, 16);
 
 		const auto names = Narrow(ReadString(L"Screen", L"sScreenNames", L""));
@@ -99,7 +101,8 @@ namespace fv
 		}
 		forceNode = Narrow(ReadString(L"Screen", L"sForceNode", L""));
 		srgb = ReadInt(L"Screen", L"iSRGB", srgb);
-		resetUV = ReadBool(L"Screen", L"bResetUV", resetUV);
+		fitUV = ReadBool(L"Screen", L"bFitVideoToScreen", fitUV);
+		stopScreenAnimation = ReadBool(L"Screen", L"bStopScreenAnimation", stopScreenAnimation);
 		brightness = ReadFloat(L"Screen", L"fBrightness", brightness);
 		placeholderPrefix = Narrow(ReadString(L"Screen", L"sPlaceholderPrefix", L""));
 
@@ -108,10 +111,10 @@ namespace fv
 		minDistance = ReadFloat(L"Audio", L"fMinDistance", minDistance);
 		maxDistance = std::max(ReadFloat(L"Audio", L"fMaxDistance", maxDistance), minDistance + 1.0f);
 
-		log::info("settings: hotkeys={} play=0x{:X} test=0x{:X} stop=0x{:X} dump=0x{:X} loop={} maxScreens={}",
-			enableHotkeys, keyPlay, keyTestPattern, keyStop, keyDump, loop, maxScreens);
-		log::info("settings: screenNames=[{}] forceNode='{}' srgb={} resetUV={} audio={} volume={:.2f} dist={:.0f}-{:.0f}",
+		log::info("settings: hotkeys={} play=0x{:X} test=0x{:X} stop=0x{:X} dump=0x{:X} mesh=0x{:X} loop={} pause={} maxScreens={}",
+			enableHotkeys, keyPlay, keyTestPattern, keyStop, keyDump, keyNextMesh, loop, pauseInMenus, maxScreens);
+		log::info("settings: screenNames=[{}] forceNode='{}' srgb={} fitUV={} stopAnim={} audio={} volume={:.2f} dist={:.0f}-{:.0f}",
 			[&] { std::string s; for (auto& n : screenNames) { if (!s.empty()) s += ","; s += n; } return s; }(),
-			forceNode, srgb, resetUV, enableAudio, volume, minDistance, maxDistance);
+			forceNode, srgb, fitUV, stopScreenAnimation, enableAudio, volume, minDistance, maxDistance);
 	}
 }

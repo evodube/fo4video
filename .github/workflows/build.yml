@@ -31,7 +31,7 @@ jobs:
         run: xmake f -m releasedbg -y
 
       - name: Build
-        run: xmake build -y fo4video
+        run: xmake build -y RealVideos
 
       - name: Package
         shell: pwsh
@@ -41,24 +41,24 @@ jobs:
           Copy-Item -Recurse dist/Data "$stage/Data"
           Remove-Item "$stage/Data/Videos/.keep" -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force "$stage/Data/F4SE/Plugins" | Out-Null
-          Copy-Item build/out/F4SE/Plugins/fo4video.dll "$stage/Data/F4SE/Plugins/"
-          Copy-Item build/out/F4SE/Plugins/fo4video.pdb "$stage/Data/F4SE/Plugins/" -ErrorAction SilentlyContinue
-          Copy-Item LICENSE "$stage/Data/F4SE/Plugins/fo4video-LICENSE.txt" -ErrorAction SilentlyContinue
+          Copy-Item build/out/F4SE/Plugins/RealVideos.dll "$stage/Data/F4SE/Plugins/"
+          Copy-Item build/out/F4SE/Plugins/RealVideos.pdb "$stage/Data/F4SE/Plugins/" -ErrorAction SilentlyContinue
+          Copy-Item LICENSE "$stage/Data/F4SE/Plugins/RealVideos-LICENSE.txt" -ErrorAction SilentlyContinue
           Get-ChildItem -Recurse $stage | Select-Object FullName
 
       - uses: actions/upload-artifact@v4
         with:
-          name: fo4video
+          name: RealVideos
           path: stage/
 
       - name: Zip for release
         if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
-        run: Compress-Archive -Path stage/Data -DestinationPath "fo4video-${{ github.ref_name }}.zip"
+        run: Compress-Archive -Path stage/Data -DestinationPath "RealVideos-${{ github.ref_name }}.zip"
 
       - name: Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: fo4video-${{ github.ref_name }}.zip
+          files: RealVideos-${{ github.ref_name }}.zip
           prerelease: ${{ contains(github.ref_name, '-') }}

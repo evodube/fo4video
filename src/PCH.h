@@ -11,6 +11,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cfloat>
 #include <cmath>
 #include <condition_variable>
 #include <cstdint>
@@ -20,9 +21,11 @@
 #include <filesystem>
 #include <format>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <thread>

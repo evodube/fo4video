@@ -1,9 +1,9 @@
--- fo4video: play real video files (MP4 etc.) on in-game screens in Fallout 4.
+-- Real Videos: play real video files (MP4 etc.) on in-game screens in Fallout 4.
 -- Built against Dear-Modding CommonLibF4. Primary target: Fallout 4 OG (1.10.163).
 includes("lib/commonlibf4")
 
-set_project("fo4video")
-set_version("0.1.0")
+set_project("RealVideos")
+set_version("0.2.0")
 set_license("GPL-3.0")
 set_languages("c++23")
 set_warnings("allextra")
@@ -18,9 +18,9 @@ add_rules("mode.debug", "mode.releasedbg")
 -- REL::ID / REL::Offset initializer slots are [OG, NG, AE].
 add_defines("COMMONLIB_RUNTIMECOUNT=3")
 
-target("fo4video", function()
+target("RealVideos", function()
     add_rules("commonlibf4.plugin", {
-        name = "fo4video",
+        name = "RealVideos",
         author = "evodube",
         description = "Plays video files on in-game TVs.",
         plugin_template = path.join(os.projectdir(), "res/commonlibf4-plugin.cpp.in"),

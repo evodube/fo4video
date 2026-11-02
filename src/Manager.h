@@ -54,6 +54,7 @@ namespace fv
 		float              userVolume{ 1.0f };
 		std::atomic<bool>  stopping{ false };
 		std::uint64_t      framesShown{ 0 };
+		int                rebindCooldown{ 0 };
 	};
 
 	class Manager
@@ -79,6 +80,7 @@ namespace fv
 		void HotkeyTestPattern();
 		void HotkeyStop();
 		void HotkeyDump();
+		void HotkeyNextMesh(bool a_flip);
 
 		// --- render thread ---
 		void OnPresent(ID3D11Device* a_device, ID3D11DeviceContext* a_context);
@@ -88,6 +90,7 @@ namespace fv
 		int  FreeSlot() const;
 		void StopLocked(Player& a_player);
 		void PollHotkeys();
+		bool IsGamePaused() const;
 		void ScheduleMaintain();
 
 		std::mutex                           _lock;
@@ -97,6 +100,7 @@ namespace fv
 		std::atomic<bool> _maintainPending{ false };
 		std::uint64_t     _frame{ 0 };
 		std::size_t       _nextVideo{ 0 };
-		std::array<bool, 4> _keyWasDown{};
+		std::array<bool, 5> _keyWasDown{};
+		bool                _wasPaused{ false };
 	};
 }

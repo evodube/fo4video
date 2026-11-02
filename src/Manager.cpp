@@ -284,12 +284,12 @@ namespace fv
 	bool Manager::Start(RE::TESObjectREFR* a_ref, SourceKind a_kind, const std::wstring& a_file, bool a_loop)
 	{
 		if (!a_ref) {
-			Notify("fo4video: no screen selected");
+			Notify("Real Videos: no screen selected");
 			return false;
 		}
 		const auto refName = Screen::RefName(a_ref);
 		if (!a_ref->Get3D()) {
-			Notify(std::format("fo4video: {} is not loaded", refName));
+			Notify(std::format("Real Videos: {} is not loaded", refName));
 			return false;
 		}
 
@@ -303,7 +303,7 @@ namespace fv
 			}
 			slot = FreeSlot();
 			if (slot < 0) {
-				Notify("fo4video: all screen slots are busy (raise iMaxScreens)");
+				Notify("Real Videos: all screen slots are busy (raise iMaxScreens)");
 				return false;
 			}
 			_slots[slot].inUse = true;
@@ -316,7 +316,7 @@ namespace fv
 
 		auto slotTexture = Screen::LoadSlotTexture(slot);
 		if (!slotTexture) {
-			Notify("fo4video: placeholder textures missing (Data\\Textures\\fo4video)");
+			Notify("Real Videos: placeholder textures missing (Data\\Textures\\RealVideos)");
 			releaseSlot();
 			return false;
 		}
@@ -332,20 +332,20 @@ namespace fv
 
 		if (a_kind == SourceKind::kVideo) {
 			if (!std::filesystem::exists(a_file)) {
-				Notify(std::format("fo4video: file not found: {}", Narrow(a_file)));
+				Notify(std::format("Real Videos: file not found: {}", Narrow(a_file)));
 				releaseSlot();
 				return false;
 			}
 			player->media = std::make_unique<MediaSource>();
 			if (!player->media->Open(a_file, Settings::Get().enableAudio)) {
-				Notify(std::format("fo4video: could not decode {}", Narrow(std::filesystem::path(a_file).filename().wstring())));
+				Notify(std::format("Real Videos: could not decode {}", Narrow(std::filesystem::path(a_file).filename().wstring())));
 				releaseSlot();
 				return false;
 			}
 		}
 
 		if (!Screen::Bind(a_ref, slotTexture.get(), player->binding)) {
-			Notify(std::format("fo4video: no screen found on {} (see fo4video.log)", refName));
+			Notify(std::format("Real Videos: no screen found on {} (see RealVideos.log)", refName));
 			releaseSlot();
 			return false;
 		}
@@ -363,9 +363,9 @@ namespace fv
 		}
 
 		if (a_kind == SourceKind::kVideo) {
-			Notify(std::format("fo4video: playing {} on {}", Narrow(std::filesystem::path(a_file).filename().wstring()), refName));
+			Notify(std::format("Real Videos: playing {} on {}", Narrow(std::filesystem::path(a_file).filename().wstring()), refName));
 		} else {
-			Notify(std::format("fo4video: test pattern on {}", refName));
+			Notify(std::format("Real Videos: test pattern on {}", refName));
 		}
 		return true;
 	}
@@ -447,13 +447,22 @@ namespace fv
 			}
 
 			auto* root = ref->Get3D();
-			if (root != p->binding.root.get()) {
-				// 3D was unloaded or rebuilt (cell change, workshop move...): rebind to the new one
-				Screen::Unbind(p->binding);
-				if (root && _slots[p->slot].niTexture) {
-					if (Screen::Bind(ref.get(), _slots[p->slot].niTexture.get(), p->binding)) {
-						p->srgb = p->binding.originalWasSRGB;
+			const bool valid = Screen::StillValid(p->binding, root);
+			if (!valid) {
+				// 3D unloaded/rebuilt, screen part re-attached (projector screens), or another mod swapped
+				// the material: rebind. When unbound, retry about once a second.
+				const bool wasBound = p->binding.bound;
+				if (wasBound || p->rebindCooldown-- <= 0) {
+					if (wasBound) {
+						log::info("{}: screen mesh changed, rebinding", p->name);
 					}
+					Screen::Unbind(p->binding);
+					if (root && _slots[p->slot].niTexture) {
+						if (Screen::Bind(ref.get(), _slots[p->slot].niTexture.get(), p->binding)) {
+							p->srgb = p->binding.originalWasSRGB;
+						}
+					}
+					p->rebindCooldown = 6;
 				}
 			}
 
@@ -489,12 +498,12 @@ namespace fv
 	{
 		auto ref = PickedRef();
 		if (!ref) {
-			Notify("fo4video: open the console and click a TV first");
+			Notify("Real Videos: open the console and click a TV first");
 			return;
 		}
 		const auto videos = ListVideos();
 		if (videos.empty()) {
-			Notify(std::format("fo4video: no videos in {}", Narrow(Settings::Get().videoFolder)));
+			Notify(std::format("Real Videos: no videos in {}", Narrow(Settings::Get().videoFolder)));
 			return;
 		}
 		const auto& name = videos[_nextVideo % videos.size()];
@@ -506,7 +515,7 @@ namespace fv
 	{
 		auto ref = PickedRef();
 		if (!ref) {
-			Notify("fo4video: open the console and click a TV first");
+			Notify("Real Videos: open the console and click a TV first");
 			return;
 		}
 		PlayTestPattern(ref.get());
@@ -516,10 +525,10 @@ namespace fv
 	{
 		if (auto ref = PickedRef(); ref && IsPlaying(ref.get())) {
 			Stop(ref.get());
-			Notify(std::format("fo4video: stopped {}", Screen::RefName(ref.get())));
+			Notify(std::format("Real Videos: stopped {}", Screen::RefName(ref.get())));
 		} else {
 			StopAll();
-			Notify("fo4video: stopped all screens");
+			Notify("Real Videos: stopped all screens");
 		}
 	}
 
@@ -527,11 +536,81 @@ namespace fv
 	{
 		auto ref = PickedRef();
 		if (!ref) {
-			Notify("fo4video: open the console and click a TV first");
+			Notify("Real Videos: open the console and click a TV first");
 			return;
 		}
 		Screen::Dump(ref.get());
-		Notify(std::format("fo4video: node dump of {} written to fo4video.log", Screen::RefName(ref.get())));
+		Notify(std::format("Real Videos: node dump of {} written to RealVideos.log", Screen::RefName(ref.get())));
+	}
+
+	bool Manager::IsGamePaused() const
+	{
+		const auto& s = Settings::Get();
+		if (s.pauseUnfocused) {
+			const HWND window = GameWindow();
+			if (window && ::GetForegroundWindow() != window) {
+				return true;
+			}
+		}
+		if (!s.pauseInMenus) {
+			return false;
+		}
+		auto* ui = RE::UI::GetSingleton();
+		if (!ui) {
+			return false;
+		}
+		if (ui->menuMode != 0 || ui->freezeFramePause != 0) {
+			return true;  // any menu that pauses the game (Esc, Pip-Boy, console, containers...)
+		}
+		static const std::array<RE::BSFixedString, 4> menus{
+			RE::BSFixedString("PauseMenu"), RE::BSFixedString("PipboyMenu"), RE::BSFixedString("LoadingMenu"), RE::BSFixedString("MainMenu")
+		};
+		for (const auto& name : menus) {
+			if (ui->GetMenuOpen(name)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	void Manager::HotkeyNextMesh(bool a_flip)
+	{
+		auto ref = PickedRef();
+		if (!ref) {
+			Notify("Real Videos: open the console and click a screen first");
+			return;
+		}
+
+		std::string message;
+		{
+			std::scoped_lock lock(_lock);
+			Player*          player = nullptr;
+			for (auto& p : _players) {
+				if (p->formID == ref->GetFormID() && !p->stopping) {
+					player = p.get();
+				}
+			}
+			if (!player || !_slots[player->slot].niTexture) {
+				message = "Real Videos: play something on it first (F10 or F9)";
+			} else {
+				auto&     b = player->binding;
+				const int count = std::max(1, b.bound ? b.candidateCount : Screen::CountCandidates(ref.get()));
+				const int index = ((b.bound ? b.candidateIndex : -1) + (a_flip ? 0 : 1) + count) % count;
+				const int flip = a_flip ? (b.flip + 1) % 4 : b.flip;
+
+				Screen::SaveChoice(ref.get(), { index, {}, flip });
+				Screen::Unbind(b);
+				if (Screen::Bind(ref.get(), _slots[player->slot].niTexture.get(), b, std::max(index, 0))) {
+					player->srgb = b.originalWasSRGB;
+					Screen::SaveChoice(ref.get(), { b.candidateIndex, b.geometryName, b.flip });
+					static constexpr std::array<const char*, 4> flips{ "normal", "flipped vertically", "mirrored", "rotated 180" };
+					message = std::format("Real Videos: mesh {}/{} '{}', {}", b.candidateIndex + 1, b.candidateCount, b.geometryName, flips[b.flip & 3]);
+				} else {
+					message = "Real Videos: could not use that mesh";
+				}
+			}
+		}
+		Notify(message);
 	}
 
 	void Manager::PollHotkeys()
@@ -542,21 +621,23 @@ namespace fv
 			return;
 		}
 
-		const std::array<int, 4> keys{ s.keyPlay, s.keyTestPattern, s.keyStop, s.keyDump };
+		const std::array<int, 5> keys{ s.keyPlay, s.keyTestPattern, s.keyStop, s.keyDump, s.keyNextMesh };
 		for (std::size_t i = 0; i < keys.size(); ++i) {
 			if (keys[i] <= 0) {
 				continue;
 			}
 			const bool down = (::GetAsyncKeyState(keys[i]) & 0x8000) != 0;
 			if (down && !_keyWasDown[i]) {
-				auto* tasks = F4SE::GetTaskInterface();
+				auto*      tasks = F4SE::GetTaskInterface();
+				const bool shift = (::GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
 				if (tasks) {
-					tasks->AddTask([this, i]() {
+					tasks->AddTask([this, i, shift]() {
 						switch (i) {
 						case 0: HotkeyPlayNext(); break;
 						case 1: HotkeyTestPattern(); break;
 						case 2: HotkeyStop(); break;
-						default: HotkeyDump(); break;
+						case 3: HotkeyDump(); break;
+						default: HotkeyNextMesh(shift); break;
 						}
 					});
 				}
@@ -581,8 +662,11 @@ namespace fv
 			return;
 		}
 
-		auto*      ui = RE::UI::GetSingleton();
-		const bool paused = settings.pauseInMenus && ui && ui->GameIsPaused();
+		const bool paused = IsGamePaused();
+		if (paused != _wasPaused) {
+			log::info("game {} -> {} screens", paused ? "paused" : "resumed", paused ? "pausing" : "resuming");
+			_wasPaused = paused;
+		}
 		const auto seconds = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
 
 		for (auto it = _players.begin(); it != _players.end();) {
@@ -634,6 +718,7 @@ namespace fv
 			}
 
 			slot.Patch(p.slot);
+			Screen::ReapplyUV(p.binding);
 		}
 	}
 }

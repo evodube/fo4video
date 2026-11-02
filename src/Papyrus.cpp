@@ -7,7 +7,7 @@ namespace fv::Papyrus
 {
 	namespace
 	{
-		constexpr auto kScript = "FO4Video"sv;
+		constexpr auto kScript = "RealVideos"sv;
 
 		std::wstring Widen(const std::string& a_str)
 		{

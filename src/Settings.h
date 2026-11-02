@@ -10,16 +10,19 @@ namespace fv
 		int          keyTestPattern{ VK_F10 };
 		int          keyStop{ VK_F11 };
 		int          keyDump{ VK_F8 };
+		int          keyNextMesh{ VK_F7 };  // Shift+key flips the picture
 		std::wstring videoFolder{ L"Data\\Videos" };
 		bool         loop{ true };
-		bool         pauseInMenus{ false };
+		bool         pauseInMenus{ true };
+		bool         pauseUnfocused{ true };
 		int          maxScreens{ 8 };
 
 		// [Screen]
 		std::vector<std::string> screenNames{ "screen", "display", "monitor", "crt", "tube" };
 		std::string              forceNode;
 		int                      srgb{ -1 };  // -1 auto (match original texture), 0 linear, 1 sRGB
-		bool                     resetUV{ true };
+		bool                     fitUV{ true };
+		bool                     stopScreenAnimation{ true };
 		float                    brightness{ 1.0f };
 		std::string              placeholderPrefix;  // empty = try "Textures\\" then ""
 

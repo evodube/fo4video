@@ -8,6 +8,7 @@ namespace fv::Screen
 	{
 		constexpr std::uint16_t kPlaceholderWidth = 4;
 		constexpr std::uint16_t kPlaceholderHeight = 8;
+		constexpr auto          kChoiceIni = "Data\\F4SE\\Plugins\\RealVideos_Screens.ini";
 
 		std::string Str(const RE::BSFixedString& a_str)
 		{
@@ -23,10 +24,20 @@ namespace fv::Screen
 			return a_str;
 		}
 
-		bool ContainsAny(const std::string& a_haystackLower, const std::vector<std::string>& a_needles)
+		bool ContainsAny(const std::string& a_haystackLower, std::span<const std::string> a_needles)
 		{
 			for (const auto& n : a_needles) {
 				if (!n.empty() && a_haystackLower.find(n) != std::string::npos) {
+					return true;
+				}
+			}
+			return false;
+		}
+
+		bool ContainsAny(const std::string& a_haystackLower, std::initializer_list<std::string_view> a_needles)
+		{
+			for (const auto n : a_needles) {
+				if (a_haystackLower.find(n) != std::string::npos) {
 					return true;
 				}
 			}
@@ -45,6 +56,15 @@ namespace fv::Screen
 		{
 			// BSLightingShaderMaterialGlowmap::spGlowMapTexture at 0xC0 (per F4SE 0.6.23)
 			return *reinterpret_cast<RE::NiPointer<RE::NiTexture>*>(reinterpret_cast<std::uintptr_t>(a_material) + 0xC0);
+		}
+
+		bool IsScreenShader(RE::BSShaderProperty* a_prop)
+		{
+			if (!a_prop || !a_prop->material) {
+				return false;
+			}
+			const auto type = a_prop->material->GetType();
+			return type == RE::BSShaderMaterial::Type::kEffect || type == RE::BSShaderMaterial::Type::kLighting;
 		}
 
 		std::string BaseTextureName(RE::BSShaderProperty* a_prop)
@@ -72,13 +92,14 @@ namespace fv::Screen
 			}
 		}
 
-		struct GeomInfo
+		struct Candidate
 		{
 			RE::BSGeometry* geom;
+			std::string     name;
 			std::string     pathLower;  // ancestor names joined with '/'
 		};
 
-		void Collect(RE::NiAVObject* a_obj, const std::string& a_path, std::vector<GeomInfo>& a_out, int a_depth = 0)
+		void Collect(RE::NiAVObject* a_obj, const std::string& a_path, std::vector<Candidate>& a_out, int a_depth = 0)
 		{
 			if (!a_obj || a_depth > 64) {
 				return;
@@ -87,7 +108,9 @@ namespace fv::Screen
 			const auto path = a_path.empty() ? name : a_path + "/" + name;
 
 			if (auto* geom = a_obj->IsGeometry()) {
-				a_out.push_back({ geom, Lower(path) });
+				if (IsScreenShader(GetShaderProperty(geom))) {
+					a_out.push_back({ geom, name, Lower(path) });
+				}
 				return;
 			}
 			if (auto* node = a_obj->IsNode()) {
@@ -97,6 +120,140 @@ namespace fv::Screen
 					}
 				}
 			}
+		}
+
+		std::vector<Candidate> Candidates(RE::NiAVObject* a_root)
+		{
+			std::vector<Candidate> out;
+			Collect(a_root, {}, out);
+			return out;
+		}
+
+		int Score(const Candidate& a_c)
+		{
+			const auto& settings = Settings::Get();
+			auto*       prop = GetShaderProperty(a_c.geom);
+			const auto  nameLower = Lower(a_c.name);
+			const auto  texLower = Lower(BaseTextureName(prop));
+			const bool  effect = prop && prop->material && prop->material->GetType() == RE::BSShaderMaterial::Type::kEffect;
+
+			int score = 0;
+			if (ContainsAny(nameLower, settings.screenNames)) {
+				score += 30;
+			}
+			if (ContainsAny(texLower, settings.screenNames)) {
+				score += 25;
+			}
+			if (ContainsAny(a_c.pathLower, settings.screenNames)) {
+				score += 10;
+			}
+			// light beams, flares and other effects are never the screen
+			if (ContainsAny(nameLower, { "beam", "flare", "ray", "fog", "dust", "cone", "volum", "glare", "halo" }) ||
+				ContainsAny(texLower, { "beam", "flare", "lightray", "fog", "dust", "glare", "halo" })) {
+				score -= 100;
+			}
+			// building materials are frames, backs and stands
+			if (ContainsAny(texLower, { "concrete", "metal", "wood", "rust", "brick", "plaster", "girder", "steel" })) {
+				score -= 15;
+			}
+			if (effect) {
+				score += 3;
+			}
+			return score;
+		}
+
+		int BestCandidate(const std::vector<Candidate>& a_candidates)
+		{
+			int best = -1;
+			int bestScore = std::numeric_limits<int>::min();
+			for (int i = 0; i < static_cast<int>(a_candidates.size()); ++i) {
+				const int s = Score(a_candidates[i]);
+				if (s > bestScore) {
+					best = i;
+					bestScore = s;
+				}
+			}
+			return best;
+		}
+
+		// --- UV bounds from the CPU copy of the vertex data ---
+
+		float HalfToFloat(std::uint16_t a_h)
+		{
+			const std::uint32_t sign = (a_h & 0x8000u) << 16;
+			std::uint32_t       exp = (a_h >> 10) & 0x1F;
+			std::uint32_t       mant = a_h & 0x3FF;
+			std::uint32_t       bits;
+			if (exp == 0) {
+				if (mant == 0) {
+					bits = sign;
+				} else {
+					exp = 127 - 15 + 1;
+					while (!(mant & 0x400)) {
+						mant <<= 1;
+						--exp;
+					}
+					mant &= 0x3FF;
+					bits = sign | (exp << 23) | (mant << 13);
+				}
+			} else if (exp == 31) {
+				bits = sign | 0x7F800000 | (mant << 13);
+			} else {
+				bits = sign | ((exp + 127 - 15) << 23) | (mant << 13);
+			}
+			float f;
+			std::memcpy(&f, &bits, sizeof(f));
+			return f;
+		}
+
+		struct UVBounds
+		{
+			float u0{ 0 }, v0{ 0 }, u1{ 1 }, v1{ 1 };
+			bool  ok{ false };
+		};
+
+		UVBounds ReadUVBounds(RE::BSGeometry* a_geom)
+		{
+			UVBounds out;
+			auto*    tri = a_geom ? a_geom->IsTriShape() : nullptr;
+			if (!tri) {
+				return out;
+			}
+			auto* shape = static_cast<RE::BSGraphics::TriShape*>(a_geom->rendererData);
+			if (!shape || !shape->vertexBuffer || !shape->vertexBuffer->data) {
+				return out;
+			}
+			auto desc = a_geom->vertexDesc;
+			if (!desc.HasFlag(RE::BSGraphics::Vertex::Flags::VF_UV)) {
+				return out;
+			}
+			const std::uint32_t stride = desc.GetSize();
+			const std::uint32_t offset = desc.GetAttributeOffset(RE::BSGraphics::Vertex::Attribute::VA_TEXCOORD0);
+			const std::uint32_t count = tri->numVertices;
+			if (stride == 0 || offset + 4 > stride || count == 0) {
+				return out;
+			}
+
+			const auto* data = static_cast<const std::uint8_t*>(shape->vertexBuffer->data);
+			float       u0 = FLT_MAX, v0 = FLT_MAX, u1 = -FLT_MAX, v1 = -FLT_MAX;
+			for (std::uint32_t i = 0; i < count; ++i) {
+				std::uint16_t h[2];
+				std::memcpy(h, data + static_cast<std::size_t>(i) * stride + offset, sizeof(h));
+				const float u = HalfToFloat(h[0]);
+				const float v = HalfToFloat(h[1]);
+				if (!std::isfinite(u) || !std::isfinite(v)) {
+					continue;
+				}
+				u0 = std::min(u0, u);
+				u1 = std::max(u1, u);
+				v0 = std::min(v0, v);
+				v1 = std::max(v1, v);
+			}
+			if (u1 - u0 < 1e-4f || v1 - v0 < 1e-4f || std::abs(u0) > 1000.f || std::abs(v1) > 1000.f) {
+				return out;
+			}
+			out = { u0, v0, u1, v1, true };
+			return out;
 		}
 
 		bool IsSRGBFormat(DXGI_FORMAT a_format)
@@ -172,6 +329,18 @@ namespace fv::Screen
 		}
 
 		std::array<RE::NiPointer<RE::NiTexture>, 16> g_slotTextures;
+
+		std::string ModelKey(RE::TESObjectREFR* a_ref)
+		{
+			auto* base = a_ref ? a_ref->GetObjectReference() : nullptr;
+			if (!base) {
+				return {};
+			}
+			if (auto* file = base->GetFile(0)) {
+				return std::format("{}|{:06X}", file->GetFilename(), base->GetLocalFormID());
+			}
+			return std::format("{:08X}", base->GetFormID());
+		}
 	}
 
 	bool IsPlaceholderTexture(RE::NiTexture* a_tex)
@@ -202,7 +371,7 @@ namespace fv::Screen
 		}
 
 		const auto& settings = Settings::Get();
-		const auto  file = std::format("fo4video\\slot{:02}.dds", a_slot);
+		const auto  file = std::format("RealVideos\\slot{:02}.dds", a_slot);
 
 		std::vector<std::string> candidates;
 		if (!settings.placeholderPrefix.empty()) {
@@ -237,77 +406,58 @@ namespace fv::Screen
 			return fallback;
 		}
 
-		log::error("slot {}: could not load placeholder texture '{}'. Is Data\\Textures\\fo4video installed?", a_slot, file);
+		log::error("slot {}: could not load placeholder texture '{}'. Is Data\\Textures\\RealVideos installed?", a_slot, file);
 		return {};
 	}
 
-	RE::BSGeometry* FindScreenGeometry(RE::NiAVObject* a_root)
+	ScreenChoice LoadChoice(RE::TESObjectREFR* a_ref)
 	{
-		if (!a_root) {
-			return nullptr;
+		ScreenChoice choice;
+		const auto   key = ModelKey(a_ref);
+		if (key.empty()) {
+			return choice;
 		}
-		const auto& settings = Settings::Get();
-
-		if (!settings.forceNode.empty()) {
-			if (auto* obj = a_root->GetObjectByName(RE::BSFixedString(settings.forceNode))) {
-				std::vector<GeomInfo> sub;
-				Collect(obj, {}, sub);
-				for (auto& g : sub) {
-					if (GetShaderProperty(g.geom)) {
-						return g.geom;
-					}
-				}
-			}
-			log::warn("sForceNode '{}' not found or has no shaded geometry", settings.forceNode);
+		char buf[512]{};
+		::GetPrivateProfileStringA("Screens", key.c_str(), "", buf, sizeof(buf), kChoiceIni);
+		const std::string value = buf;
+		if (value.empty()) {
+			return choice;
 		}
-
-		std::vector<GeomInfo> geoms;
-		Collect(a_root, {}, geoms);
-
-		RE::BSGeometry* best = nullptr;
-		int             bestScore = 0;
-		RE::BSGeometry* onlyEffect = nullptr;
-		int             effectCount = 0;
-
-		for (auto& g : geoms) {
-			auto* prop = GetShaderProperty(g.geom);
-			if (!prop || !prop->material) {
-				continue;
+		// index|name|flip
+		const auto p1 = value.find('|');
+		const auto p2 = p1 == std::string::npos ? std::string::npos : value.find('|', p1 + 1);
+		try {
+			choice.index = std::stoi(value.substr(0, p1));
+			if (p1 != std::string::npos) {
+				choice.name = value.substr(p1 + 1, p2 == std::string::npos ? std::string::npos : p2 - p1 - 1);
 			}
-			const auto type = prop->material->GetType();
-			if (type != RE::BSShaderMaterial::Type::kEffect && type != RE::BSShaderMaterial::Type::kLighting) {
-				continue;
+			if (p2 != std::string::npos) {
+				choice.flip = std::stoi(value.substr(p2 + 1)) & 3;
 			}
-			if (type == RE::BSShaderMaterial::Type::kEffect) {
-				onlyEffect = g.geom;
-				++effectCount;
-			}
-
-			int        score = 0;
-			const auto ownName = Lower(Str(g.geom->name));
-			if (ContainsAny(ownName, settings.screenNames)) {
-				score = 3;
-			} else if (ContainsAny(g.pathLower, settings.screenNames)) {
-				score = 2;
-			} else if (ContainsAny(Lower(BaseTextureName(prop)), settings.screenNames)) {
-				score = 1;
-			}
-			if (score > bestScore) {
-				best = g.geom;
-				bestScore = score;
-			}
+		} catch (...) {
+			return {};
 		}
-
-		if (best) {
-			return best;
-		}
-		if (effectCount == 1) {
-			return onlyEffect;  // a single glowing surface on a TV is almost always the screen
-		}
-		return nullptr;
+		return choice;
 	}
 
-	bool Bind(RE::TESObjectREFR* a_ref, RE::NiTexture* a_slotTexture, ScreenBinding& a_binding)
+	void SaveChoice(RE::TESObjectREFR* a_ref, const ScreenChoice& a_choice)
+	{
+		const auto key = ModelKey(a_ref);
+		if (key.empty()) {
+			return;
+		}
+		const auto value = std::format("{}|{}|{}", a_choice.index, a_choice.name, a_choice.flip);
+		::WritePrivateProfileStringA("Screens", key.c_str(), value.c_str(), kChoiceIni);
+		log::info("saved screen choice for {}: {}", key, value);
+	}
+
+	int CountCandidates(RE::TESObjectREFR* a_ref)
+	{
+		auto* root = a_ref ? a_ref->Get3D() : nullptr;
+		return root ? static_cast<int>(Candidates(root).size()) : 0;
+	}
+
+	bool Bind(RE::TESObjectREFR* a_ref, RE::NiTexture* a_slotTexture, ScreenBinding& a_binding, int a_forceIndex)
 	{
 		a_binding = {};
 		if (!a_ref || !a_slotTexture) {
@@ -318,11 +468,46 @@ namespace fv::Screen
 			return false;
 		}
 
-		auto* geom = FindScreenGeometry(root);
-		if (!geom) {
-			log::warn("{}: no screen geometry found. Press the dump key (or set sForceNode) to pick one.", RefName(a_ref));
+		const auto candidates = Candidates(root);
+		if (candidates.empty()) {
+			log::warn("{}: no textured meshes found", RefName(a_ref));
 			return false;
 		}
+		const int   count = static_cast<int>(candidates.size());
+		const auto& settings = Settings::Get();
+		const auto  saved = LoadChoice(a_ref);
+
+		int index = -1;
+		if (a_forceIndex >= 0) {
+			index = a_forceIndex % count;
+		} else if (saved.index >= 0) {
+			if (saved.index < count && candidates[saved.index].name == saved.name) {
+				index = saved.index;
+			} else {
+				for (int i = 0; i < count; ++i) {
+					if (candidates[i].name == saved.name) {
+						index = i;
+						break;
+					}
+				}
+			}
+		}
+		if (index < 0 && !settings.forceNode.empty()) {
+			for (int i = 0; i < count; ++i) {
+				if (_stricmp(candidates[i].name.c_str(), settings.forceNode.c_str()) == 0) {
+					index = i;
+					break;
+				}
+			}
+		}
+		if (index < 0) {
+			index = BestCandidate(candidates);
+		}
+		if (index < 0) {
+			return false;
+		}
+
+		auto* geom = candidates[index].geom;
 		auto* prop = GetShaderProperty(geom);
 		if (!prop || !prop->material) {
 			return false;
@@ -334,10 +519,9 @@ namespace fv::Screen
 		if (!mat) {
 			return false;
 		}
+		mat->IncRef();
 
-		const auto& settings = Settings::Get();
-		const auto  type = mat->GetType();
-
+		const auto type = mat->GetType();
 		for (int i = 0; i < 2; ++i) {
 			a_binding.originalUVOffset[i] = mat->texCoordOffset[i];
 			a_binding.originalUVScale[i] = mat->texCoordScale[i];
@@ -354,7 +538,7 @@ namespace fv::Screen
 			em->baseTexture = RE::NiPointer<RE::NiTexture>(a_slotTexture);
 			em->baseColor = RE::NiColorA{ 1.0f, 1.0f, 1.0f, 1.0f };
 			em->baseColorScale = settings.brightness;
-		} else if (type == RE::BSShaderMaterial::Type::kLighting) {
+		} else {
 			auto* lm = static_cast<RE::BSLightingShaderMaterialBase*>(mat);
 			a_binding.originalBase = lm->diffuseTexture;
 			a_binding.originalWasSRGB = TextureIsSRGB(lm->diffuseTexture.get());
@@ -366,25 +550,55 @@ namespace fv::Screen
 				a_binding.originalGlow = glow;
 				glow = RE::NiPointer<RE::NiTexture>(a_slotTexture);
 			}
-		} else {
-			return false;
 		}
 
-		if (settings.resetUV) {
+		// stop UV/flipbook animation controllers (Videos of the Wasteland scrolls its screens this way)
+		if (settings.stopScreenAnimation && prop->controllers) {
+			a_binding.savedControllers = prop->controllers;
+			prop->controllers.reset();
+		}
+
+		// map the mesh's UV range onto the whole video
+		const int flip = a_forceIndex >= 0 || saved.index >= 0 ? saved.flip : 0;
+		UVBounds  uv{};
+		if (settings.fitUV) {
+			uv = ReadUVBounds(geom);
+			float u0 = 0, v0 = 0, u1 = 1, v1 = 1;
+			if (uv.ok) {
+				u0 = uv.u0;
+				v0 = uv.v0;
+				u1 = uv.u1;
+				v1 = uv.v1;
+			}
+			// shader does: uv' = uv * scale + offset
+			const bool flipV = (flip & 1) != 0;
+			const bool flipU = (flip & 2) != 0;
+			const float su = 1.0f / (u1 - u0);
+			const float sv = 1.0f / (v1 - v0);
+			a_binding.uvScale = { flipU ? -su : su, flipV ? -sv : sv };
+			a_binding.uvOffset = { flipU ? u1 * su : -u0 * su, flipV ? v1 * sv : -v0 * sv };
 			for (int i = 0; i < 2; ++i) {
-				mat->texCoordOffset[i] = RE::NiPoint2{ 0.0f, 0.0f };
-				mat->texCoordScale[i] = RE::NiPoint2{ 1.0f, 1.0f };
+				mat->texCoordOffset[i] = a_binding.uvOffset;
+				mat->texCoordScale[i] = a_binding.uvScale;
 			}
 		}
 
 		a_binding.root = RE::NiPointer<RE::NiAVObject>(root);
 		a_binding.geometry = RE::NiPointer<RE::BSGeometry>(geom);
 		a_binding.material = mat;
+		a_binding.slotTexture = RE::NiPointer<RE::NiTexture>(a_slotTexture);
+		a_binding.candidateIndex = index;
+		a_binding.candidateCount = count;
+		a_binding.flip = flip;
+		a_binding.geometryName = candidates[index].name;
 		a_binding.bound = true;
 
-		log::info("{}: bound screen '{}' ({} shader{}, original texture '{}', sRGB={})", RefName(a_ref), Str(geom->name),
-			a_binding.isEffect ? "effect" : "lighting", a_binding.hadGlow ? " + glowmap" : "",
-			a_binding.originalBase ? std::string(a_binding.originalBase->GetName()) : std::string("<none>"), a_binding.originalWasSRGB);
+		log::info("{}: bound mesh {}/{} '{}' ({} shader{}, texture '{}', sRGB={}, uv {} [{:.3f},{:.3f}]-[{:.3f},{:.3f}], flip {}, controllers {})",
+			RefName(a_ref), index + 1, count, candidates[index].name, a_binding.isEffect ? "effect" : "lighting",
+			a_binding.hadGlow ? " + glowmap" : "",
+			a_binding.originalBase ? std::string(a_binding.originalBase->GetName()) : std::string("<none>"), a_binding.originalWasSRGB,
+			settings.fitUV ? (uv.ok ? "fit" : "unread") : "untouched", uv.u0, uv.v0, uv.u1, uv.v1, flip,
+			a_binding.savedControllers ? "stopped" : "none");
 		return true;
 	}
 
@@ -414,8 +628,53 @@ namespace fv::Screen
 					GlowTexture(mat) = a_binding.originalGlow;
 				}
 			}
+			if (a_binding.savedControllers && !prop->controllers) {
+				prop->controllers = a_binding.savedControllers;
+			}
+		}
+		if (a_binding.material) {
+			// drop our ref; never free it ourselves (the engine owns it)
+			(void)a_binding.material->DecRef();
 		}
 		a_binding = {};
+	}
+
+	bool StillValid(const ScreenBinding& a_binding, RE::NiAVObject* a_currentRoot)
+	{
+		if (!a_binding.bound || a_binding.root.get() != a_currentRoot || !a_currentRoot) {
+			return false;
+		}
+		auto* geom = a_binding.geometry.get();
+		bool  attached = false;
+		for (RE::NiAVObject* node = geom; node; node = node->parent) {
+			if (node == a_currentRoot) {
+				attached = true;
+				break;
+			}
+		}
+		if (!attached) {
+			return false;
+		}
+		auto* prop = GetShaderProperty(geom);
+		if (!prop || prop->material != a_binding.material) {
+			return false;
+		}
+		if (a_binding.isEffect) {
+			return static_cast<RE::BSEffectShaderMaterial*>(a_binding.material)->baseTexture.get() == a_binding.slotTexture.get();
+		}
+		return static_cast<RE::BSLightingShaderMaterialBase*>(a_binding.material)->diffuseTexture.get() == a_binding.slotTexture.get();
+	}
+
+	void ReapplyUV(const ScreenBinding& a_binding)
+	{
+		if (!a_binding.bound || !a_binding.material || !Settings::Get().fitUV) {
+			return;
+		}
+		auto* mat = a_binding.material;
+		for (int i = 0; i < 2; ++i) {
+			mat->texCoordOffset[i] = a_binding.uvOffset;
+			mat->texCoordScale[i] = a_binding.uvScale;
+		}
 	}
 
 	void Dump(RE::TESObjectREFR* a_ref)
@@ -425,42 +684,26 @@ namespace fv::Screen
 			return;
 		}
 		auto* root = a_ref->Get3D();
-		log::info("==== dump {} root '{}' ====", RefName(a_ref), root ? Str(root->name) : std::string("<3D not loaded>"));
+		log::info("==== dump {} model key '{}' root '{}' ====", RefName(a_ref), ModelKey(a_ref),
+			root ? Str(root->name) : std::string("<3D not loaded>"));
 		if (!root) {
 			return;
 		}
 
-		std::vector<GeomInfo> geoms;
-		Collect(root, {}, geoms);
-		auto* chosen = FindScreenGeometry(root);
-
-		int index = 0;
-		for (auto& g : geoms) {
-			auto*       prop = GetShaderProperty(g.geom);
-			std::string shader = "none";
-			std::string extra;
-			if (prop && prop->material) {
-				auto* mat = prop->material;
-				switch (mat->GetType()) {
-				case RE::BSShaderMaterial::Type::kEffect:
-					shader = "effect";
-					break;
-				case RE::BSShaderMaterial::Type::kLighting:
-					shader = std::format("lighting(feature {})", static_cast<int>(mat->GetFeature()));
-					break;
-				default:
-					shader = std::format("type {}", static_cast<int>(mat->GetType()));
-					break;
-				}
-				extra = std::format(" tex='{}' uvOff=({:.2f},{:.2f}) uvScale=({:.2f},{:.2f})", BaseTextureName(prop),
-					mat->texCoordOffset[0].x, mat->texCoordOffset[0].y, mat->texCoordScale[0].x, mat->texCoordScale[0].y);
-			}
-			log::info("  [{}]{} '{}' path='{}' shader={}{}", index++, g.geom == chosen ? " <== SCREEN" : "", Str(g.geom->name),
-				g.pathLower, shader, extra);
+		const auto candidates = Candidates(root);
+		const int  best = BestCandidate(candidates);
+		for (int i = 0; i < static_cast<int>(candidates.size()); ++i) {
+			const auto& c = candidates[i];
+			auto*       prop = GetShaderProperty(c.geom);
+			auto*       mat = prop->material;
+			const auto  uv = ReadUVBounds(c.geom);
+			log::info("  [{}]{} '{}' path='{}' shader={} score={} tex='{}' meshUV={} [{:.3f},{:.3f}]-[{:.3f},{:.3f}] matUV off=({:.2f},{:.2f}) scale=({:.2f},{:.2f}) controllers={}",
+				i + 1, i == best ? " <== auto pick" : "", c.name, c.pathLower,
+				mat->GetType() == RE::BSShaderMaterial::Type::kEffect ? "effect" : std::format("lighting/{}", static_cast<int>(mat->GetFeature())),
+				Score(c), BaseTextureName(prop), uv.ok ? "ok" : "n/a", uv.u0, uv.v0, uv.u1, uv.v1,
+				mat->texCoordOffset[0].x, mat->texCoordOffset[0].y, mat->texCoordScale[0].x, mat->texCoordScale[0].y,
+				prop->controllers ? "yes" : "no");
 		}
-		if (!chosen) {
-			log::info("  no screen picked automatically. Put the name of the right one in sForceNode in fo4video.ini");
-		}
-		log::info("==== end dump ====");
+		log::info("==== end dump ({} candidates) ====", candidates.size());
 	}
 }
