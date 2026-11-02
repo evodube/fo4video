@@ -81,7 +81,7 @@ namespace fv
 		void HotkeyTestPattern();
 		void HotkeyStop();
 		void HotkeyDump();
-		void HotkeyNextMesh(bool a_flip);
+		void HotkeyNextMesh(int a_mode);
 
 		// --- render thread ---
 		void OnPresent(ID3D11Device* a_device, ID3D11DeviceContext* a_context);

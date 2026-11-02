@@ -60,7 +60,8 @@ namespace fv
 		// Render thread: re-apply our UV mapping (cheap; undoes any UV animation from other mods).
 		void ReapplyUV(const ScreenBinding& a_binding);
 
-		int  CountCandidates(RE::TESObjectREFR* a_ref);
+		int  CountCandidates(RE::TESObjectREFR* a_ref);     // own meshes + nearby screens
+		int  CountOwnCandidates(RE::TESObjectREFR* a_ref);  // own meshes only (they come first)
 		void SaveChoice(RE::TESObjectREFR* a_ref, const ScreenChoice& a_choice);
 		ScreenChoice LoadChoice(RE::TESObjectREFR* a_ref);
 

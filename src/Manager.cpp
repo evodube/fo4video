@@ -614,8 +614,10 @@ namespace fv
 		return false;
 	}
 
-	void Manager::HotkeyNextMesh(bool a_flip)
+	// a_mode: 0 = next mesh of this object, 1 = flip/mirror, 2 = next screen of a nearby object
+	void Manager::HotkeyNextMesh(int a_mode)
 	{
+		const bool a_flip = a_mode == 1;
 		auto ref = PickedRef();
 		if (!ref) {
 			Notify("Real Videos: open the console and click a screen first");
@@ -633,10 +635,23 @@ namespace fv
 			}
 			if (!player || !_slots[player->slot].niTexture) {
 				message = "Real Videos: play something on it first (F10 or F9)";
+			} else if (a_mode == 2 && Screen::CountCandidates(ref.get()) <= Screen::CountOwnCandidates(ref.get())) {
+				message = "Real Videos: no other screens nearby";
 			} else {
 				auto&     b = player->binding;
-				const int count = std::max(1, b.bound ? b.candidateCount : Screen::CountCandidates(ref.get()));
-				const int index = ((b.bound ? b.candidateIndex : -1) + (a_flip ? 0 : 1) + count) % count;
+				const int total = std::max(1, Screen::CountCandidates(ref.get()));
+				const int own = std::clamp(Screen::CountOwnCandidates(ref.get()), 0, total);
+				const int current = b.bound ? b.candidateIndex : -1;
+				int       index = std::max(current, 0);
+				if (a_mode == 0) {
+					// own meshes only: wrap around inside [0, own)
+					index = own > 0 ? (current >= 0 && current < own ? (current + 1) % own : 0) : 0;
+				} else if (a_mode == 2) {
+					// nearby screens only: [own, total)
+					if (total > own) {
+						index = current >= own && current + 1 < total ? current + 1 : own;
+					}
+				}
 				const int flip = a_flip ? (b.flip + 1) % 4 : b.flip;
 
 				Screen::SaveChoice(ref.get(), { index, {}, flip, {} });
@@ -647,8 +662,12 @@ namespace fv
 					Screen::SaveChoice(ref.get(), { b.candidateIndex, b.geometryName, b.flip, b.ownerIsNearby ? b.ownerKey : std::string() });
 					static constexpr std::array<const char*, 4> flips{ "normal", "flipped vertically", "mirrored", "rotated 180" };
 					auto owner = b.owner.get();
-					message = std::format("Real Videos: mesh {}/{} '{}'{}, {}", b.candidateIndex + 1, b.candidateCount, b.geometryName,
-						b.ownerIsNearby ? std::format(" on nearby {}", Screen::RefName(owner.get())) : std::string(), flips[b.flip & 3]);
+					if (b.ownerIsNearby) {
+						message = std::format("Real Videos: screen {}/{} nearby: {} '{}', {}", b.candidateIndex - own + 1, total - own,
+							Screen::RefName(owner.get()), b.geometryName, flips[b.flip & 3]);
+					} else {
+						message = std::format("Real Videos: mesh {}/{} '{}', {}", b.candidateIndex + 1, own, b.geometryName, flips[b.flip & 3]);
+					}
 				} else {
 					message = "Real Videos: could not use that mesh";
 				}
@@ -674,14 +693,15 @@ namespace fv
 			if (down && !_keyWasDown[i]) {
 				auto*      tasks = F4SE::GetTaskInterface();
 				const bool shift = (::GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+				const bool ctrl = (::GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
 				if (tasks) {
-					tasks->AddTask([this, i, shift]() {
+					tasks->AddTask([this, i, shift, ctrl]() {
 						switch (i) {
 						case 0: HotkeyPlayNext(); break;
 						case 1: HotkeyTestPattern(); break;
 						case 2: HotkeyStop(); break;
 						case 3: HotkeyDump(); break;
-						default: HotkeyNextMesh(shift); break;
+						default: HotkeyNextMesh(ctrl ? 2 : shift ? 1 : 0); break;
 						}
 					});
 				}

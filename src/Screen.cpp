@@ -112,7 +112,8 @@ namespace fv::Screen
 			const auto path = a_path.empty() ? name : a_path + "/" + name;
 
 			if (auto* geom = a_obj->IsGeometry()) {
-				if (IsScreenShader(GetShaderProperty(geom))) {
+				// editor/idle markers are invisible in game
+				if (IsScreenShader(GetShaderProperty(geom)) && Lower(name).find("marker") == std::string::npos) {
 					a_out.push_back({ geom, name, Lower(path) });
 				}
 				return;
@@ -127,6 +128,7 @@ namespace fv::Screen
 		}
 
 		std::string ModelKey(RE::TESObjectREFR* a_ref);
+		int         Score(const Candidate& a_c);
 
 		void CollectRef(RE::TESObjectREFR* a_ref, bool a_nearby, std::vector<Candidate>& a_out)
 		{
@@ -145,8 +147,10 @@ namespace fv::Screen
 			}
 		}
 
-		// The selected object's meshes first, then meshes of objects right next to it
-		// (e.g. a drive-in screen that has another screen object placed in front of it).
+		constexpr int kScreenLike = 20;  // score a nearby mesh needs to be offered as a screen
+
+		// The selected object's meshes first, then screen-like meshes of objects around it, nearest first
+		// (a projector's screen, or a drive-in screen that can't be clicked in the console).
 		std::vector<Candidate> Candidates(RE::TESObjectREFR* a_ref, bool a_includeNearby)
 		{
 			std::vector<Candidate> out;
@@ -179,14 +183,19 @@ namespace fv::Screen
 
 			int used = 0;
 			for (auto& [dist, other] : refs) {
-				if (used >= 12) {
+				if (used >= 16) {
 					break;
 				}
-				const auto before = out.size();
-				CollectRef(other, true, out);
-				if (out.size() != before) {
-					++used;
+				std::vector<Candidate> theirs;
+				CollectRef(other, true, theirs);
+				bool any = false;
+				for (auto& c : theirs) {
+					if (Score(c) >= kScreenLike) {
+						out.push_back(std::move(c));
+						any = true;
+					}
 				}
+				used += any ? 1 : 0;
 			}
 			return out;
 		}
@@ -209,10 +218,22 @@ namespace fv::Screen
 			if (ContainsAny(a_c.pathLower, settings.screenNames)) {
 				score += 10;
 			}
+			// surfaces made to show moving pictures (VotW, TV animations, film reels)
+			if (ContainsAny(texLower, { "votw", "tvanim", "standby", "film", "reel", "movie", "projector" }) ||
+				ContainsAny(nameLower, { "film", "movie", "projection" })) {
+				score += 20;
+			}
+			// the housing of a projector screen shares the "screen" name but not the clean screen texture
+			if (ContainsAny(texLower, { "speaker", "housing", "frame", "case", "cabinet" })) {
+				score -= 30;
+			}
 			// light beams, flares and other effects are never the screen
 			if (ContainsAny(nameLower, { "beam", "flare", "ray", "fog", "dust", "cone", "volum", "glare", "halo" }) ||
 				ContainsAny(texLower, { "beam", "flare", "lightray", "fog", "dust", "glare", "halo" })) {
 				score -= 100;
+			}
+			if (ContainsAny(nameLower, { "glass", "noise" }) || ContainsAny(texLower, { "noise", "colorblackutility" })) {
+				score -= 20;  // overlays drawn on top of a TV screen
 			}
 			// building materials are frames, backs and stands
 			if (ContainsAny(texLower, { "concrete", "metal", "wood", "rust", "brick", "plaster", "girder", "steel" })) {
@@ -551,7 +572,7 @@ namespace fv::Screen
 			return choice;
 		}
 		char buf[512]{};
-		::GetPrivateProfileStringA("Screens", key.c_str(), "", buf, sizeof(buf), kChoiceIni);
+		::GetPrivateProfileStringA("Screens.v3", key.c_str(), "", buf, sizeof(buf), kChoiceIni);
 		const std::string value = buf;
 		if (value.empty()) {
 			return choice;
@@ -594,13 +615,18 @@ namespace fv::Screen
 		auto owner = a_choice.owner;
 		std::ranges::replace(owner, '|', '/');
 		const auto value = std::format("{}|{}|{}|{}", a_choice.index, a_choice.name, a_choice.flip, owner);
-		::WritePrivateProfileStringA("Screens", key.c_str(), value.c_str(), kChoiceIni);
+		::WritePrivateProfileStringA("Screens.v3", key.c_str(), value.c_str(), kChoiceIni);
 		log::info("saved screen choice for {}: {}", key, value);
 	}
 
 	int CountCandidates(RE::TESObjectREFR* a_ref)
 	{
 		return static_cast<int>(Candidates(a_ref, true).size());
+	}
+
+	int CountOwnCandidates(RE::TESObjectREFR* a_ref)
+	{
+		return static_cast<int>(Candidates(a_ref, false).size());
 	}
 
 	bool Bind(RE::TESObjectREFR* a_ref, RE::NiTexture* a_slotTexture, ScreenBinding& a_binding, int a_forceIndex)
@@ -654,6 +680,24 @@ namespace fv::Screen
 		}
 		if (index < 0) {
 			index = BestCandidate(candidates);
+			const int ownScore = index >= 0 ? Score(candidates[index]) : std::numeric_limits<int>::min();
+			if (ownScore < 10) {
+				// a projector (or anything without a screen of its own): use the best screen nearby
+				int best = -1, bestScore = kScreenLike - 1;
+				for (int i = 0; i < count; ++i) {
+					if (candidates[i].nearby) {
+						const int sc = Score(candidates[i]);
+						if (sc > bestScore) {
+							best = i;
+							bestScore = sc;
+						}
+					}
+				}
+				if (best >= 0) {
+					log::info("{}: has no screen of its own, using nearby {}", RefName(a_ref), RefName(candidates[best].owner));
+					index = best;
+				}
+			}
 		}
 		if (index < 0) {
 			return false;
