@@ -388,7 +388,10 @@ namespace fv::Screen
 			return a_du.Len() > 1e-9 && a_dv.Len() > 1e-9;
 		}
 
-		MeshShape AnalyzeMesh(RE::BSGeometry* a_geom)
+		// a_texAspect: width/height of the mesh's original texture in pixels (0 = unknown). Artists paint a
+		// screen's area upright into the texture, so a landscape area means "not rotated" and a portrait one
+		// means "lying sideways" - more reliable than the mesh's rest pose (skinned / animated screens).
+		MeshShape AnalyzeMesh(RE::BSGeometry* a_geom, float a_texAspect = 0.0f)
 		{
 			MeshShape out;
 			auto*     tri = a_geom ? a_geom->IsTriShape() : nullptr;
@@ -614,8 +617,14 @@ namespace fv::Screen
 					const double h = (a_swap ? Du : Dv).Len() * spanV;
 					return w > 1e-6 && h > 1e-6 ? w / h : 0.0;
 				};
-				// screens are landscape: if the geometry says portrait (or can't be trusted), turn it the other way
-				if (skinned || shapeFor(swap) < 0.9 && shapeFor(!swap) > 1.0) {
+				// shape of the screen area inside the texture, in pixels
+				const double texel = a_texAspect > 0.0f ? (a_rect[2] - a_rect[0]) / (a_rect[3] - a_rect[1]) * a_texAspect : 0.0;
+				if (texel > 1.2) {
+					swap = false;  // painted landscape: upright in the texture
+				} else if (texel > 0.0 && texel < 0.83) {
+					swap = true;   // painted portrait: the picture lies sideways in the texture
+				} else if (skinned || shapeFor(swap) < 0.9 && shapeFor(!swap) > 1.0) {
+					// screens are landscape: if the geometry says portrait (or can't be trusted), turn it the other way
 					swap = shapeFor(true) > shapeFor(false) && shapeFor(false) < 0.9;
 				}
 				const Vec3 hAxis = swap ? Dv : Du;  // texture axis that runs left-right on screen
@@ -631,7 +640,10 @@ namespace fv::Screen
 				if (swap) {
 					a_orient |= 4;
 				}
-				const double aspect = shapeFor(swap);
+				double aspect = shapeFor(swap);
+				if (texel > 0.0 && (skinned || aspect < 0.9)) {
+					aspect = swap ? 1.0 / texel : texel;  // geometry can't be trusted here; the texture can
+				}
 				a_aspect = aspect > 0.2 && aspect < 6.0 ? static_cast<float>(aspect) : 0.0f;
 			};
 
@@ -677,9 +689,9 @@ namespace fv::Screen
 			return out;
 		}
 
-		UVBounds ReadUVBounds(RE::BSGeometry* a_geom)
+		UVBounds ReadUVBounds(RE::BSGeometry* a_geom, float a_texAspect = 0.0f)
 		{
-			const auto shape = AnalyzeMesh(a_geom);
+			const auto shape = AnalyzeMesh(a_geom, a_texAspect);
 			UVBounds   out = shape.all;
 			out.aspect = shape.aspect;
 			return out;
@@ -699,6 +711,24 @@ namespace fv::Screen
 			default:
 				return false;
 			}
+		}
+
+		// width / height in pixels, 0 if unknown
+		float TextureAspect(RE::NiTexture* a_tex)
+		{
+			auto* rt = a_tex ? a_tex->rendererTexture : nullptr;
+			if (!rt || !rt->srView) {
+				return 0.0f;
+			}
+			Microsoft::WRL::ComPtr<ID3D11Resource> res;
+			reinterpret_cast<ID3D11ShaderResourceView*>(rt->srView)->GetResource(res.GetAddressOf());
+			Microsoft::WRL::ComPtr<ID3D11Texture2D> tex;
+			if (!res || FAILED(res.As(&tex)) || !tex) {
+				return 0.0f;
+			}
+			D3D11_TEXTURE2D_DESC desc{};
+			tex->GetDesc(&desc);
+			return desc.Height > 0 ? static_cast<float>(desc.Width) / static_cast<float>(desc.Height) : 0.0f;
 		}
 
 		bool TextureIsSRGB(RE::NiTexture* a_tex)
@@ -904,6 +934,79 @@ namespace fv::Screen
 		return static_cast<int>(Candidates(a_ref, false).size());
 	}
 
+	namespace
+	{
+		void HideLayer(ScreenBinding& a_binding, RE::NiAVObject* a_obj)
+		{
+			if (!a_obj || std::ranges::any_of(a_binding.hiddenLayers, [&](const auto& h) { return h.get() == a_obj; })) {
+				return;
+			}
+			a_binding.hiddenLayerWasCulled.push_back(a_obj->GetAppCulled());
+			a_binding.hiddenLayers.emplace_back(a_obj);
+			a_obj->SetAppCulled(true);
+		}
+
+		// Film layers of other objects drawn over our screen: the drive-in movie stills (Far Harbor's film,
+		// Rebuild's film object) that a projector script enables when it's switched on. The projector's light
+		// beam and sound are left alone.
+		void ScanFilmLayers(ScreenBinding& a_binding)
+		{
+			auto* geom = a_binding.geometry.get();
+			if (!geom || geom->worldBound.fRadius <= 0.0f) {
+				return;
+			}
+			const auto& mine = geom->worldBound;
+			const float radius = std::max(mine.fRadius * 3.0f, 3000.0f);
+
+			std::vector<RE::TESObjectREFR*> refs;
+			auto gather = [&](RE::TESObjectCELL* a_cell) {
+				if (!a_cell) {
+					return;
+				}
+				a_cell->ForEachReferenceInRange(mine.center, radius, [&](RE::TESObjectREFR* a_other) {
+					if (a_other && !a_other->IsActor() && !a_other->IsDisabled() && a_other->Get3D() && std::ranges::find(refs, a_other) == refs.end()) {
+						refs.push_back(a_other);
+					}
+					return RE::BSContainer::ForEachResult::kContinue;
+				});
+			};
+			auto owner = a_binding.owner.get();
+			gather(owner ? owner->GetParentCell() : nullptr);
+			if (auto* player = RE::PlayerCharacter::GetSingleton(); player && (!owner || player->GetParentCell() != owner->GetParentCell())) {
+				gather(player->GetParentCell());
+			}
+
+			const auto before = a_binding.hiddenLayers.size();
+			for (auto* ref : refs) {
+				std::vector<Candidate> layers;
+				Collect(ref->Get3D(), {}, layers);
+				for (auto& c : layers) {
+					if (c.geom == geom) {
+						continue;
+					}
+					auto*      prop = GetShaderProperty(c.geom);
+					const bool effect = prop && prop->material && prop->material->GetType() == RE::BSShaderMaterial::Type::kEffect;
+					const auto tex = Lower(BaseTextureName(prop));
+					const auto name = Lower(c.name);
+					const bool film = ContainsAny(tex, { "moviefx", "moviestill" }) ||
+					                  (effect && (ContainsAny(tex, { "movie", "film" }) || ContainsAny(name, { "texholder", "movie", "film" }) ||
+												 ContainsAny(c.pathLower, { "movie" })));
+					if (!film || ContainsAny(name, { "beam", "light", "flare", "ray" }) || ContainsAny(tex, { "beam", "flare", "lightray" })) {
+						continue;
+					}
+					const auto& theirs = c.geom->worldBound;
+					if (mine.center.GetDistance(theirs.center) > std::max(mine.fRadius, theirs.fRadius) * 1.5f) {
+						continue;
+					}
+					HideLayer(a_binding, c.geom);
+				}
+			}
+			if (a_binding.hiddenLayers.size() > before) {
+				log::info("'{}': hid {} film layer(s) drawn over the screen", a_binding.geometryName, a_binding.hiddenLayers.size() - before);
+			}
+		}
+	}
+
 	bool Bind(RE::TESObjectREFR* a_ref, RE::NiTexture* a_slotTexture, ScreenBinding& a_binding, int a_forceIndex)
 	{
 		a_binding = {};
@@ -1016,6 +1119,7 @@ namespace fv::Screen
 		}
 		mat->IncRef();
 
+		const auto origTexLower = Lower(BaseTextureName(prop));
 		const auto type = mat->GetType();
 		for (int i = 0; i < 2; ++i) {
 			a_binding.originalUVOffset[i] = mat->texCoordOffset[i];
@@ -1047,115 +1151,142 @@ namespace fv::Screen
 			}
 		}
 
-		// stop UV/flipbook animation controllers (Videos of the Wasteland scrolls its screens this way)
-		if (settings.stopScreenAnimation && prop->controllers) {
-			a_binding.savedControllers = prop->controllers;
-			prop->controllers.reset();
-		}
+		// TV screens (glowing effect-shader screens such as ScreenAnim): exactly like 0.1 - the video covers the
+		// whole texture and the mesh's own UVs pick the part that shows. No face detection, bars or hiding.
+		const bool filmSurface = ContainsAny(origTexLower, { "moviefx", "drivein" }) ||
+		                         ContainsAny(Lower(candidates[index].name), { "drivein", "texholder" });
+		a_binding.classic = settings.classicTV && a_binding.isEffect && !candidates[index].nearby && !filmSurface;
+		const int userFlip = a_forceIndex >= 0 || saved.index >= 0 ? saved.flip : 0;
+		int       flip = userFlip & 3;
+		MeshShape shape{};
 
-		// work out the screen face, which way is up, and whether the frame shares the texture
-		const auto shape = AnalyzeMesh(geom);
-		const int  userFlip = a_forceIndex >= 0 || saved.index >= 0 ? saved.flip : 0;
-		const int  flip = (userFlip ^ shape.flipHint) & 7;
-		const auto inTexture = [](const std::array<float, 4>& r) { return r[0] >= -0.01f && r[1] >= -0.01f && r[2] <= 1.01f && r[3] <= 1.01f; };
-		const std::array<float, 4> whole{ shape.all.u0, shape.all.v0, shape.all.u1, shape.all.v1 };
-		const bool rotated = (flip & 4) != 0;
-
-		// which faces get the video: normally only the one facing you (Ctrl+Shift+F7 picks the other side)
-		std::vector<int> chosen;
-		for (int k = 0; k < shape.faces; ++k) {
-			chosen.push_back(k);
-		}
-		if (shape.faces == 2 && !settings.bothSides) {
-			int front = 0;
-			if (auto* player = RE::PlayerCharacter::GetSingleton()) {
-				const auto eye = player->GetPosition();
-				float      best = -FLT_MAX;
-				for (int k = 0; k < 2; ++k) {
-					const auto  c = shape.faceCenter[k];
-					const auto  n = shape.faceNormal[k];
-					const float facing = n.x * (eye.x - c.x) + n.y * (eye.y - c.y) + n.z * (eye.z - c.z);
-					if (facing > best) {
-						best = facing;
-						front = k;
-					}
-				}
-			}
-			if (userFlip & 8) {
-				front = 1 - front;
-			}
-			chosen = { front };
-		}
-		const bool facesInTexture = std::ranges::all_of(chosen, [&](int k) { return inTexture(shape.face[k]); }) && !chosen.empty();
-
-		a_binding.screenAspect = chosen.empty() ? 0.0f : shape.faceAspect[chosen[0]];
-		a_binding.faceCount = static_cast<int>(chosen.size());
-		for (std::size_t i = 0; i < chosen.size() && i < 2; ++i) {
-			const int k = chosen[i];
-			a_binding.faceRects[i] = shape.face[k];
-			a_binding.faceAspect[i] = shape.faceAspect[k];
-			a_binding.faceOrient[i] = (userFlip ^ shape.faceOrient[k]) & 7;
-		}
-		const bool otherSideHidden = shape.faces == 2 && chosen.size() == 1;
-		if (settings.composite && (shape.partial || otherSideHidden) && facesInTexture) {
-			a_binding.composite = true;  // frame shares the texture (or we skip the back): video only inside the face
-		} else if (settings.composite && rotated && shape.all.ok && inTexture(whole)) {
-			// whole mesh is the screen but its texture lies sideways: draw the video rotated
-			a_binding.composite = true;
-			a_binding.faceCount = 1;
-			a_binding.faceRects[0] = whole;
-			a_binding.faceAspect[0] = a_binding.screenAspect;
-		}
-
-		if (!a_binding.composite && settings.fitUV) {
-			// map the mesh's UV range onto the whole video (shader does: uv' = uv * scale + offset)
-			float u0 = 0, v0 = 0, u1 = 1, v1 = 1;
-			if (shape.all.ok) {
-				u0 = shape.all.u0;
-				v0 = shape.all.v0;
-				u1 = shape.all.u1;
-				v1 = shape.all.v1;
-			}
-			const bool  flipV = (flip & 1) != 0;
-			const bool  flipU = (flip & 2) != 0;
-			const float su = 1.0f / (u1 - u0);
-			const float sv = 1.0f / (v1 - v0);
-			a_binding.uvScale = { flipU ? -su : su, flipV ? -sv : sv };
-			a_binding.uvOffset = { flipU ? u1 * su : -u0 * su, flipV ? v1 * sv : -v0 * sv };
+		if (a_binding.classic) {
+			const bool flipV = (userFlip & 1) != 0;  // Shift+F7 can still flip / mirror it
+			const bool flipU = (userFlip & 2) != 0;
+			a_binding.uvScale = { flipU ? -1.0f : 1.0f, flipV ? -1.0f : 1.0f };
+			a_binding.uvOffset = { flipU ? 1.0f : 0.0f, flipV ? 1.0f : 0.0f };
 			a_binding.overrideUV = true;
 			for (int i = 0; i < 2; ++i) {
 				mat->texCoordOffset[i] = a_binding.uvOffset;
 				mat->texCoordScale[i] = a_binding.uvScale;
 			}
-		}
+			a_binding.screenAspect = 0.0f;  // stretch to fill, no black bars
+		} else {
+			// stop UV/flipbook animation controllers (Videos of the Wasteland scrolls its screens this way)
+			if (settings.stopScreenAnimation && prop->controllers) {
+				a_binding.savedControllers = prop->controllers;
+				prop->controllers.reset();
+			}
 
-		// effect screens that colour their texture through a palette would tint the video
-		if (a_binding.isEffect) {
-			a_binding.originalFlags = prop->flags.underlying();
-			prop->SetFlag(RE::BSShaderProperty::EShaderPropertyFlag::kGrayscaleToPaletteColor, false);
-			prop->SetFlag(RE::BSShaderProperty::EShaderPropertyFlag::kGrayscaleToPaletteAlpha, false);
-			a_binding.flagsChanged = true;
-		}
+			// work out the screen face, which way is up, and whether the frame shares the texture
+			shape = AnalyzeMesh(geom, TextureAspect(a_binding.originalBase.get()));
+			flip = (userFlip ^ shape.flipHint) & 7;
+			const auto inTexture = [](const std::array<float, 4>& r) { return r[0] >= -0.01f && r[1] >= -0.01f && r[2] <= 1.01f && r[3] <= 1.01f; };
+			const std::array<float, 4> whole{ shape.all.u0, shape.all.v0, shape.all.u1, shape.all.v1 };
+			const bool rotated = (flip & 4) != 0;
 
-		// glowing layers drawn over the same spot (a TV's noise/glass overlays, the stills and credits of the
-		// drive-in movie) would cover the video: hide them while we play
-		if (a_binding.isEffect && settings.hideOverlays) {
-			std::vector<Candidate> layers;
-			Collect(candidates[index].root, {}, layers);
-			const auto& mine = geom->worldBound;
-			for (auto& c : layers) {
-				auto* other = c.geom;
-				auto* otherProp = GetShaderProperty(other);
-				if (other == geom || other->GetAppCulled() || !otherProp || !otherProp->material ||
-					otherProp->material->GetType() != RE::BSShaderMaterial::Type::kEffect) {
-					continue;
+			// which faces get the video: normally only the one facing you (Ctrl+Shift+F7 picks the other side)
+			std::vector<int> chosen;
+			for (int k = 0; k < shape.faces; ++k) {
+				chosen.push_back(k);
+			}
+			if (shape.faces == 2 && !settings.bothSides) {
+				int front = 0;
+				if (auto* player = RE::PlayerCharacter::GetSingleton()) {
+					const auto eye = player->GetPosition();
+					float      best = -FLT_MAX;
+					for (int k = 0; k < 2; ++k) {
+						const auto  c = shape.faceCenter[k];
+						const auto  n = shape.faceNormal[k];
+						const float facing = n.x * (eye.x - c.x) + n.y * (eye.y - c.y) + n.z * (eye.z - c.z);
+						if (facing > best) {
+							best = facing;
+							front = k;
+						}
+					}
 				}
-				const auto& theirs = other->worldBound;
-				const float reach = std::max(mine.fRadius, theirs.fRadius) * 1.2f;
-				if (mine.center.GetDistance(theirs.center) <= reach) {
-					other->SetAppCulled(true);
-					a_binding.hiddenLayers.emplace_back(other);
+				if (userFlip & 8) {
+					front = 1 - front;
 				}
+				chosen = { front };
+			}
+			const bool facesInTexture = std::ranges::all_of(chosen, [&](int k) { return inTexture(shape.face[k]); }) && !chosen.empty();
+
+			a_binding.screenAspect = chosen.empty() ? 0.0f : shape.faceAspect[chosen[0]];
+			a_binding.faceCount = static_cast<int>(chosen.size());
+			for (std::size_t i = 0; i < chosen.size() && i < 2; ++i) {
+				const int k = chosen[i];
+				a_binding.faceRects[i] = shape.face[k];
+				a_binding.faceAspect[i] = shape.faceAspect[k];
+				a_binding.faceOrient[i] = (userFlip ^ shape.faceOrient[k]) & 7;
+			}
+			const bool otherSideHidden = shape.faces == 2 && chosen.size() == 1;
+			if (settings.composite && (shape.partial || otherSideHidden) && facesInTexture) {
+				a_binding.composite = true;  // frame shares the texture (or we skip the back): video only inside the face
+			} else if (settings.composite && rotated && shape.all.ok && inTexture(whole)) {
+				// whole mesh is the screen but its texture lies sideways: draw the video rotated
+				a_binding.composite = true;
+				a_binding.faceCount = 1;
+				a_binding.faceRects[0] = whole;
+				a_binding.faceAspect[0] = a_binding.screenAspect;
+			}
+
+			if (!a_binding.composite && settings.fitUV) {
+				// map the mesh's UV range onto the whole video (shader does: uv' = uv * scale + offset)
+				float u0 = 0, v0 = 0, u1 = 1, v1 = 1;
+				if (shape.all.ok) {
+					u0 = shape.all.u0;
+					v0 = shape.all.v0;
+					u1 = shape.all.u1;
+					v1 = shape.all.v1;
+				}
+				const bool  flipV = (flip & 1) != 0;
+				const bool  flipU = (flip & 2) != 0;
+				const float su = 1.0f / (u1 - u0);
+				const float sv = 1.0f / (v1 - v0);
+				a_binding.uvScale = { flipU ? -su : su, flipV ? -sv : sv };
+				a_binding.uvOffset = { flipU ? u1 * su : -u0 * su, flipV ? v1 * sv : -v0 * sv };
+				a_binding.overrideUV = true;
+				for (int i = 0; i < 2; ++i) {
+					mat->texCoordOffset[i] = a_binding.uvOffset;
+					mat->texCoordScale[i] = a_binding.uvScale;
+				}
+			}
+
+			// effect screens that colour their texture through a palette would tint the video
+			if (a_binding.isEffect) {
+				a_binding.originalFlags = prop->flags.underlying();
+				prop->SetFlag(RE::BSShaderProperty::EShaderPropertyFlag::kGrayscaleToPaletteColor, false);
+				prop->SetFlag(RE::BSShaderProperty::EShaderPropertyFlag::kGrayscaleToPaletteAlpha, false);
+				a_binding.flagsChanged = true;
+			}
+
+			// glowing layers drawn over the same spot (a TV's noise/glass overlays, the stills and credits of the
+			// drive-in movie) would cover the video: hide them while we play
+			if (a_binding.isEffect && settings.hideOverlays) {
+				std::vector<Candidate> layers;
+				Collect(candidates[index].root, {}, layers);
+				const auto& mine = geom->worldBound;
+				for (auto& c : layers) {
+					auto* other = c.geom;
+					auto* otherProp = GetShaderProperty(other);
+					if (other == geom || other->GetAppCulled() || !otherProp || !otherProp->material ||
+						otherProp->material->GetType() != RE::BSShaderMaterial::Type::kEffect) {
+						continue;
+					}
+					const auto& theirs = other->worldBound;
+					const float reach = std::max(mine.fRadius, theirs.fRadius) * 1.2f;
+					if (mine.center.GetDistance(theirs.center) <= reach) {
+						HideLayer(a_binding, other);
+					}
+				}
+			}
+
+			// the back of a two-sided sheet shows the same texture: stop drawing it so only the front has video
+			using F = RE::BSShaderProperty::EShaderPropertyFlag;
+			if (!settings.bothSides && a_binding.composite && shape.faces == 2 && a_binding.faceCount == 1 && prop->flags.all(F::kTwoSided)) {
+				prop->SetFlag(F::kTwoSided, false);
+				a_binding.twoSidedCleared = true;
 			}
 		}
 
@@ -1172,6 +1303,28 @@ namespace fv::Screen
 		RebuildRenderPasses(prop);
 		a_binding.geometryName = candidates[index].name;
 		a_binding.bound = true;
+		if (!a_binding.classic && settings.hideOverlays) {
+			ScanFilmLayers(a_binding);  // a drive-in film playing over this screen
+		}
+
+		if (a_binding.classic) {
+			log::info("{}: bound TV screen {}/{} '{}' (effect shader, texture '{}', sRGB={}): whole video, mesh UVs untouched like 0.1, flip {}",
+				RefName(a_ref), index + 1, count, candidates[index].name,
+				a_binding.originalBase ? std::string(a_binding.originalBase->GetName()) : std::string("<none>"), a_binding.originalWasSRGB, flip);
+			return true;
+		}
+		if (shape.faces == 2) {
+			const auto& a = shape.face[0];
+			const auto& b = shape.face[1];
+			const float ix = std::min(a[2], b[2]) - std::max(a[0], b[0]);
+			const float iy = std::min(a[3], b[3]) - std::max(a[1], b[1]);
+			const float smaller = std::max(1e-6f, std::min((a[2] - a[0]) * (a[3] - a[1]), (b[2] - b[0]) * (b[3] - b[1])));
+			const float overlap = ix > 0 && iy > 0 ? ix * iy / smaller : 0.0f;
+			log::info("{}: two faces: [{:.3f},{:.3f}]-[{:.3f},{:.3f}] aspect {:.2f} orient {} / [{:.3f},{:.3f}]-[{:.3f},{:.3f}] aspect {:.2f} orient {}, texture overlap {:.0f}%, showing {}{}",
+				RefName(a_ref), a[0], a[1], a[2], a[3], shape.faceAspect[0], shape.faceOrient[0], b[0], b[1], b[2], b[3], shape.faceAspect[1],
+				shape.faceOrient[1], overlap * 100.0f, a_binding.faceCount == 2 ? "both" : (a_binding.faceRects[0] == a ? "first" : "second"),
+				a_binding.twoSidedCleared ? ", back of sheet culled" : "");
+		}
 
 		log::info("{}: bound mesh {}/{} '{}'{} ({} shader{}, texture '{}', sRGB={}, mesh uv [{:.3f},{:.3f}]-[{:.3f},{:.3f}], screen face {} [{:.3f},{:.3f}]-[{:.3f},{:.3f}], {}, aspect {:.2f}, flip {} (auto {}), controllers {}, hidden layers {})",
 			RefName(a_ref), index + 1, count, candidates[index].name,
@@ -1214,6 +1367,9 @@ namespace fv::Screen
 				prop->controllers = a_binding.savedControllers;
 			}
 			RebuildRenderPasses(prop);
+			if (a_binding.twoSidedCleared) {
+				prop->SetFlag(RE::BSShaderProperty::EShaderPropertyFlag::kTwoSided, true);
+			}
 			if (a_binding.flagsChanged) {
 				const auto had = [&](RE::BSShaderProperty::EShaderPropertyFlag f) {
 					return (a_binding.originalFlags & static_cast<std::uint64_t>(f)) != 0;
@@ -1222,9 +1378,9 @@ namespace fv::Screen
 				prop->SetFlag(RE::BSShaderProperty::EShaderPropertyFlag::kGrayscaleToPaletteAlpha, had(RE::BSShaderProperty::EShaderPropertyFlag::kGrayscaleToPaletteAlpha));
 			}
 		}
-		for (auto& layer : a_binding.hiddenLayers) {
-			if (layer) {
-				layer->SetAppCulled(false);
+		for (std::size_t i = 0; i < a_binding.hiddenLayers.size(); ++i) {
+			if (auto& layer = a_binding.hiddenLayers[i]) {
+				layer->SetAppCulled(i < a_binding.hiddenLayerWasCulled.size() && a_binding.hiddenLayerWasCulled[i]);
 			}
 		}
 		if (a_binding.material) {
@@ -1265,12 +1421,16 @@ namespace fv::Screen
 		return static_cast<RE::BSLightingShaderMaterialBase*>(a_binding.material)->diffuseTexture.get() == a_binding.slotTexture.get();
 	}
 
-	void KeepOverlaysHidden(const ScreenBinding& a_binding)
+	void KeepOverlaysHidden(ScreenBinding& a_binding)
 	{
 		for (auto& layer : a_binding.hiddenLayers) {
 			if (layer && !layer->GetAppCulled()) {
 				layer->SetAppCulled(true);  // the film's own animation switched it back on
 			}
+		}
+		if (a_binding.bound && !a_binding.classic && Settings::Get().hideOverlays && --a_binding.filmScanCooldown <= 0) {
+			a_binding.filmScanCooldown = 12;  // Maintain runs every 10 frames: about every 2 seconds
+			ScanFilmLayers(a_binding);
 		}
 	}
 

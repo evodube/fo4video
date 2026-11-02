@@ -49,6 +49,10 @@ namespace fv
 		std::uint64_t                       originalFlags{ 0 };
 		bool                                flagsChanged{ false };
 		std::vector<RE::NiPointer<RE::NiAVObject>> hiddenLayers;
+		std::vector<bool>                   hiddenLayerWasCulled;  // parallel to hiddenLayers: restore exactly
+		bool                                classic{ false };       // TV screen: whole texture, untouched UVs (like 0.1)
+		bool                                twoSidedCleared{ false };  // we stopped drawing the back of the sheet
+		int                                 filmScanCooldown{ 0 };
 	};
 
 	namespace Screen
@@ -66,8 +70,9 @@ namespace fv
 		// False if the bound mesh was detached, its material replaced, or the 3D rebuilt.
 		bool StillValid(const ScreenBinding& a_binding);
 
-		// Main thread: re-hide overlay layers that the object's own animation turned back on.
-		void KeepOverlaysHidden(const ScreenBinding& a_binding);
+		// Main thread: re-hide overlay layers that the object's own animation turned back on, and every couple of
+		// seconds look for film layers that appeared over the screen (a drive-in projector being switched on).
+		void KeepOverlaysHidden(ScreenBinding& a_binding);
 
 		// Render thread: re-apply our UV mapping (cheap; undoes any UV animation from other mods).
 		void ReapplyUV(const ScreenBinding& a_binding);

@@ -107,6 +107,7 @@ namespace fv
 		composite = ReadBool(L"Screen", L"bOnlyInsideScreenArea", composite);
 		bothSides = ReadBool(L"Screen", L"bShowOnBothSides", bothSides);
 		hideOverlays = ReadBool(L"Screen", L"bHideOverlays", hideOverlays);
+		classicTV = ReadBool(L"Screen", L"bClassicTVScreens", classicTV);
 		nearbyRadius = std::max(0.0f, ReadFloat(L"Screen", L"fNearbyObjectRadius", nearbyRadius));
 		brightness = ReadFloat(L"Screen", L"fBrightness", brightness);
 		placeholderPrefix = Narrow(ReadString(L"Screen", L"sPlaceholderPrefix", L""));
@@ -118,8 +119,8 @@ namespace fv
 
 		log::info("settings: hotkeys={} play=0x{:X} test=0x{:X} stop=0x{:X} dump=0x{:X} mesh=0x{:X} loop={} pause={} maxScreens={}",
 			enableHotkeys, keyPlay, keyTestPattern, keyStop, keyDump, keyNextMesh, loop, pauseInMenus, maxScreens);
-		log::info("settings: screenNames=[{}] forceNode='{}' srgb={} fitUV={} stopAnim={} aspect={} inside={} nearby={:.0f} audio={} volume={:.2f} dist={:.0f}-{:.0f}",
+		log::info("settings: screenNames=[{}] forceNode='{}' srgb={} fitUV={} stopAnim={} aspect={} inside={} classicTV={} nearby={:.0f} audio={} volume={:.2f} dist={:.0f}-{:.0f}",
 			[&] { std::string s; for (auto& n : screenNames) { if (!s.empty()) s += ","; s += n; } return s; }(),
-			forceNode, srgb, fitUV, stopScreenAnimation, aspectMode, composite, nearbyRadius, enableAudio, volume, minDistance, maxDistance);
+			forceNode, srgb, fitUV, stopScreenAnimation, aspectMode, composite, classicTV, nearbyRadius, enableAudio, volume, minDistance, maxDistance);
 	}
 }
