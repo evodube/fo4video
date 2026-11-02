@@ -1183,6 +1183,35 @@ namespace fv::Screen
 				}
 			}
 		}
+		// The drive-in cinema always plays on its Screen_3 mesh, whether the screen, its projector or its film
+		// was selected, and whatever mesh was picked before.
+		{
+			bool cinema = false;
+			for (const auto& c : candidates) {
+				if (c.nearby) {
+					continue;
+				}
+				const auto name = Lower(c.name);
+				const auto tex = Lower(BaseTextureName(GetShaderProperty(c.geom)));
+				const auto root = Lower(c.root ? Str(c.root->name) : std::string());
+				cinema |= root.find("drivein") != std::string::npos || name.find("projectorlightbeam") != std::string::npos ||
+				          name.find("texholder") != std::string::npos || name.starts_with("moviebg") || tex.find("moviefx") != std::string::npos;
+			}
+			if (cinema) {
+				int screen3 = -1;
+				for (int i = 0; i < count; ++i) {
+					if (_stricmp(candidates[i].name.c_str(), "Screen_3") == 0) {
+						screen3 = i;  // own mesh first, then the nearest drive-in screen
+						break;
+					}
+				}
+				if (screen3 >= 0 && screen3 != index) {
+					log::info("{}: drive-in cinema: using '{}' of {}", RefName(a_ref), candidates[screen3].name, RefName(candidates[screen3].owner));
+					index = screen3;
+				}
+			}
+		}
+
 		if (index < 0) {
 			return false;
 		}
