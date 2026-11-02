@@ -1,0 +1,63 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: xmake-io/github-action-setup-xmake@v1
+        with:
+          xmake-version: latest
+          actions-cache-folder: .xmake-cache
+
+      - name: Cache xmake packages
+        uses: actions/cache@v4
+        with:
+          path: ~/AppData/Local/.xmake/packages
+          key: xmake-pkgs-${{ runner.os }}-${{ hashFiles('xmake.lua', 'lib/commonlibf4/xmake.lua', 'lib/commonlibf4/lib/commonlib-shared/xmake.lua') }}
+          restore-keys: xmake-pkgs-${{ runner.os }}-
+
+      - name: Configure
+        run: xmake f -m releasedbg -y
+
+      - name: Build
+        run: xmake build -y -v fo4video
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $stage = "stage"
+          New-Item -ItemType Directory -Force "$stage" | Out-Null
+          Copy-Item -Recurse dist/Data "$stage/Data"
+          Remove-Item "$stage/Data/Videos/.keep" -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force "$stage/Data/F4SE/Plugins" | Out-Null
+          Copy-Item build/out/F4SE/Plugins/fo4video.dll "$stage/Data/F4SE/Plugins/"
+          Copy-Item build/out/F4SE/Plugins/fo4video.pdb "$stage/Data/F4SE/Plugins/" -ErrorAction SilentlyContinue
+          Copy-Item LICENSE "$stage/Data/F4SE/Plugins/fo4video-LICENSE.txt" -ErrorAction SilentlyContinue
+          Get-ChildItem -Recurse $stage | Select-Object FullName
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fo4video
+          path: stage/
+
+      - name: Zip for release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: Compress-Archive -Path stage/Data -DestinationPath "fo4video-${{ github.ref_name }}.zip"
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: fo4video-${{ github.ref_name }}.zip
