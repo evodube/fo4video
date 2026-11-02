@@ -40,6 +40,7 @@ namespace fv
 		float maxDistance{ 1500.0f };
 		float falloffCurve{ 2.0f };
 		float bigScreenRadius{ 500.0f };   // screens this big (mesh radius) use the big-screen distances
+		bool  bigScreenStretch{ true };    // big screens: stretch the video to fill them (no black bars)
 		float bigMinDistance{ 1500.0f };
 		float bigMaxDistance{ 12000.0f };
 

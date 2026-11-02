@@ -1407,6 +1407,12 @@ namespace fv::Screen
 		a_binding.candidateIndex = index;
 		a_binding.candidateCount = count;
 		a_binding.flip = userFlip;
+		// big screens (the drive-in cinema) fill the whole screen instead of keeping black bars
+		if (settings.bigScreenStretch && !a_binding.classic && settings.bigScreenRadius > 0.0f && geom->worldBound.fRadius >= settings.bigScreenRadius) {
+			a_binding.screenAspect = 0.0f;
+			a_binding.faceAspect[0] = a_binding.faceAspect[1] = 0.0f;
+			log::info("{}: big screen (size {:.0f}): stretching the video to fill it", RefName(a_ref), geom->worldBound.fRadius);
+		}
 		RebuildRenderPasses(prop);
 		a_binding.geometryName = candidates[index].name;
 		a_binding.bound = true;
