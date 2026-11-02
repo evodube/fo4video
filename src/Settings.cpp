@@ -105,6 +105,8 @@ namespace fv
 		stopScreenAnimation = ReadBool(L"Screen", L"bStopScreenAnimation", stopScreenAnimation);
 		aspectMode = std::clamp(ReadInt(L"Screen", L"iAspectMode", aspectMode), 0, 1);
 		composite = ReadBool(L"Screen", L"bOnlyInsideScreenArea", composite);
+		bothSides = ReadBool(L"Screen", L"bShowOnBothSides", bothSides);
+		hideOverlays = ReadBool(L"Screen", L"bHideOverlays", hideOverlays);
 		nearbyRadius = std::max(0.0f, ReadFloat(L"Screen", L"fNearbyObjectRadius", nearbyRadius));
 		brightness = ReadFloat(L"Screen", L"fBrightness", brightness);
 		placeholderPrefix = Narrow(ReadString(L"Screen", L"sPlaceholderPrefix", L""));

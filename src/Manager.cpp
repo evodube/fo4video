@@ -608,6 +608,8 @@ namespace fv
 				}
 			}
 
+			Screen::KeepOverlaysHidden(p->binding);
+
 			float volume = 0.0f;
 			if (p->binding.bound && player) {
 				const auto pos = ref->GetPosition();
@@ -715,10 +717,10 @@ namespace fv
 		return false;
 	}
 
-	// a_mode: 0 = next mesh of this object, 1 = flip/mirror, 2 = next screen of a nearby object
+	// a_mode: 0 = next mesh of this object, 1 = next orientation, 2 = next screen of a nearby object, 3 = other side
 	void Manager::HotkeyNextMesh(int a_mode)
 	{
-		const bool a_flip = a_mode == 1;
+		const bool a_flip = a_mode == 1 || a_mode == 3;
 		auto ref = PickedRef();
 		if (!ref) {
 			Notify("Real Videos: open the console and click a screen first");
@@ -753,7 +755,12 @@ namespace fv
 						index = current >= own && current + 1 < total ? current + 1 : own;
 					}
 				}
-				const int flip = a_flip ? (b.flip + 1) % 4 : b.flip;
+				int flip = b.flip;
+				if (a_mode == 1) {
+					flip = (b.flip & 8) | ((b.flip + 1) & 7);
+				} else if (a_mode == 3) {
+					flip = b.flip ^ 8;
+				}
 
 				Screen::SaveChoice(ref.get(), { index, {}, flip, {} });
 				Screen::Unbind(b);
@@ -762,13 +769,15 @@ namespace fv
 					player->srgb = b.originalWasSRGB;
 					player->screenAspect = b.screenAspect;
 					Screen::SaveChoice(ref.get(), { b.candidateIndex, b.geometryName, b.flip, b.ownerIsNearby ? b.ownerKey : std::string() });
-					static constexpr std::array<const char*, 4> flips{ "normal", "flipped vertically", "mirrored", "rotated 180" };
+					static constexpr std::array<const char*, 8> turns{ "as detected", "flipped vertically", "mirrored", "rotated 180",
+						"turned 90", "turned 90 + flipped", "turned 90 + mirrored", "turned 270" };
+					const std::string flipText = std::format("{}{}", turns[b.flip & 7], (b.flip & 8) ? ", other side" : "");
 					auto owner = b.owner.get();
 					if (b.ownerIsNearby) {
 						message = std::format("Real Videos: screen {}/{} nearby: {} '{}', {}", b.candidateIndex - own + 1, total - own,
-							Screen::RefName(owner.get()), b.geometryName, flips[b.flip & 3]);
+							Screen::RefName(owner.get()), b.geometryName, flipText);
 					} else {
-						message = std::format("Real Videos: mesh {}/{} '{}', {}", b.candidateIndex + 1, own, b.geometryName, flips[b.flip & 3]);
+						message = std::format("Real Videos: mesh {}/{} '{}', {}", b.candidateIndex + 1, own, b.geometryName, flipText);
 					}
 				} else {
 					message = "Real Videos: could not use that mesh";
@@ -803,7 +812,7 @@ namespace fv
 						case 1: HotkeyTestPattern(); break;
 						case 2: HotkeyStop(); break;
 						case 3: HotkeyDump(); break;
-						default: HotkeyNextMesh(ctrl ? 2 : shift ? 1 : 0); break;
+						default: HotkeyNextMesh(ctrl && shift ? 3 : ctrl ? 2 : shift ? 1 : 0); break;
 						}
 					});
 				}

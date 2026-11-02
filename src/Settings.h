@@ -25,7 +25,9 @@ namespace fv
 		bool                     stopScreenAnimation{ true };
 		int                      aspectMode{ 1 };            // 0 = stretch, 1 = keep aspect (black bars)
 		bool                     composite{ true };          // draw the video only into the screen part of a shared texture
-		float                    nearbyRadius{ 8000.0f };    // projectors / Ctrl+F7 look for screens this close
+		bool                     bothSides{ false };
+		bool                     hideOverlays{ true };       // hide glowing layers drawn over the screen while playing         // show the video on the back of two-sided screens too
+		float                    nearbyRadius{ 15000.0f };    // projectors / Ctrl+F7 look for screens this close
 		float                    brightness{ 1.0f };
 		std::string              placeholderPrefix;  // empty = try "Textures\\" then ""
 

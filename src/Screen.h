@@ -7,7 +7,7 @@ namespace fv
 	{
 		int         index{ -1 };  // candidate index, -1 = automatic
 		std::string name;         // geometry name at that index (sanity check)
-		int         flip{ 0 };    // bit 0 = flip vertical, bit 1 = mirror horizontal
+		int         flip{ 0 };    // bit 0 = flip vertical, bit 1 = mirror, bit 2 = rotate 90, bit 3 = other side
 		std::string owner;        // model key of the object that owns the mesh (may be a nearby object)
 	};
 
@@ -65,6 +65,9 @@ namespace fv
 
 		// False if the bound mesh was detached, its material replaced, or the 3D rebuilt.
 		bool StillValid(const ScreenBinding& a_binding);
+
+		// Main thread: re-hide overlay layers that the object's own animation turned back on.
+		void KeepOverlaysHidden(const ScreenBinding& a_binding);
 
 		// Render thread: re-apply our UV mapping (cheap; undoes any UV animation from other mods).
 		void ReapplyUV(const ScreenBinding& a_binding);

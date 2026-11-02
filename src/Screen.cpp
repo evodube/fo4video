@@ -182,7 +182,7 @@ namespace fv::Screen
                     return;
                 }
                 a_cell->ForEachReferenceInRange(origin, radius, [&](RE::TESObjectREFR* a_other) {
-                    if (a_other && a_other != a_ref && !a_other->IsActor() && a_other->Get3D() &&
+                    if (a_other && a_other != a_ref && !a_other->IsActor() && !a_other->IsDisabled() && a_other->Get3D() &&
                         std::ranges::find(refs, a_other, &std::pair<float, RE::TESObjectREFR*>::second) == refs.end()) {
                         refs.emplace_back(origin.GetSquaredDistance(a_other->GetPosition()), a_other);
                     }
@@ -332,6 +332,8 @@ namespace fv::Screen
 			int                   flipHint{ 0 };   // orientation of face 0: bit 0 flip vertical, bit 1 mirror, bit 2 rotated 90
 			float                 faceAspect[2]{};  // width/height of each face as the viewer sees it
 			int                   faceOrient[2]{};  // orientation bits per face (see flipHint)
+			RE::NiPoint3          faceNormal[2]{};  // world-space outward normal
+			RE::NiPoint3          faceCenter[2]{};  // world-space centre
 			bool                  partial{ false };  // screen face uses only part of the texture (frame shares it)
 		};
 
@@ -489,7 +491,6 @@ namespace fv::Screen
 				}
 				return a;
 			};
-			const double planeEps = std::max(extent * 0.004, 0.05);
 			const double quant = std::max(extent * 1e-4, 1e-3);
 			std::unordered_map<std::uint64_t, std::vector<std::uint32_t>> byPos;
 			auto key = [&](const Vec3& p) {
@@ -508,7 +509,9 @@ namespace fv::Screen
 				for (std::size_t a = 1; a < list.size(); ++a) {
 					const auto& ta = tris[list[0]];
 					const auto& tb = tris[list[a]];
-					if (ta.n.Dot(tb.n) > 0.995 && std::abs(ta.d - tb.d) < planeEps) {
+					// smooth neighbours belong to the same surface (flat screens and curved CRT glass alike);
+					// a sharp edge (bevel, frame, post) starts a new one
+					if (ta.n.Dot(tb.n) > 0.94) {
 						parent[find(list[a])] = find(list[0]);
 					}
 				}
@@ -561,10 +564,21 @@ namespace fv::Screen
 				const double l = v.Len();
 				return l > 1e-9 ? Vec3{ v.x / l, v.y / l, v.z / l } : Vec3{};
 			};
+			const bool skinned = a_geom->skinInstance != nullptr;  // animated by bones: its rest pose says little about "up"
 			auto orientFace = [&](std::uint32_t a_root, const std::array<float, 4>& a_rect, const std::vector<std::array<double, 5>>& a_pts,
-								  float& a_aspect, int& a_orient) {
+								  float& a_aspect, int& a_orient, RE::NiPoint3& a_normal, RE::NiPoint3& a_center) {
 				a_aspect = 0.0f;
 				a_orient = 0;
+				if (!a_pts.empty()) {
+					double cx = 0, cy = 0, cz = 0;
+					for (const auto& p : a_pts) {
+						cx += p[0];
+						cy += p[1];
+						cz += p[2];
+					}
+					const double inv = 1.0 / a_pts.size();
+					a_center = a_geom->GetWorldTransform() * RE::NiPoint3(static_cast<float>(cx * inv), static_cast<float>(cy * inv), static_cast<float>(cz * inv));
+				}
 				Vec3 du, dv;
 				if (a_rect[2] - a_rect[0] < 1e-4f || a_rect[3] - a_rect[1] < 1e-4f || !FitUVMap(a_pts, du, dv)) {
 					return;
@@ -582,6 +596,7 @@ namespace fv::Screen
 					n = du.Cross(dv);
 				}
 				const Vec3 N = normalize(toWorld(n));
+				a_normal = RE::NiPoint3(static_cast<float>(N.x), static_cast<float>(N.y), static_cast<float>(N.z));
 				const Vec3 Du = toWorld(du), Dv = toWorld(dv);
 				const Vec3 up{ 0, 0, 1 };
 				const Vec3 forward{ -N.x, -N.y, -N.z };  // the viewer looks into the face
@@ -591,26 +606,33 @@ namespace fv::Screen
 				}
 				const Vec3 down = normalize(forward.Cross(right));  // = -(right x forward)
 
-				const bool swap = std::abs(Du.Dot(right)) < std::abs(Dv.Dot(right));
+				bool swap = std::abs(Du.Dot(right)) < std::abs(Dv.Dot(right));
+				auto shapeFor = [&](bool a_swap) {
+					const double spanH = a_swap ? (a_rect[3] - a_rect[1]) : (a_rect[2] - a_rect[0]);
+					const double spanV = a_swap ? (a_rect[2] - a_rect[0]) : (a_rect[3] - a_rect[1]);
+					const double w = (a_swap ? Dv : Du).Len() * spanH;
+					const double h = (a_swap ? Du : Dv).Len() * spanV;
+					return w > 1e-6 && h > 1e-6 ? w / h : 0.0;
+				};
+				// screens are landscape: if the geometry says portrait (or can't be trusted), turn it the other way
+				if (skinned || shapeFor(swap) < 0.9 && shapeFor(!swap) > 1.0) {
+					swap = shapeFor(true) > shapeFor(false) && shapeFor(false) < 0.9;
+				}
 				const Vec3 hAxis = swap ? Dv : Du;  // texture axis that runs left-right on screen
 				const Vec3 vAxis = swap ? Du : Dv;
-				if (hAxis.Dot(right) < 0) {
-					a_orient |= 2;
-				}
-				if (vAxis.Dot(down) < 0) {
-					a_orient |= 1;
+				if (!skinned) {
+					if (hAxis.Dot(right) < 0) {
+						a_orient |= 2;
+					}
+					if (vAxis.Dot(down) < 0) {
+						a_orient |= 1;
+					}
 				}
 				if (swap) {
 					a_orient |= 4;
 				}
-				const double spanH = swap ? (a_rect[3] - a_rect[1]) : (a_rect[2] - a_rect[0]);
-				const double spanV = swap ? (a_rect[2] - a_rect[0]) : (a_rect[3] - a_rect[1]);
-				const double width = hAxis.Len() * spanH;
-				const double height = vAxis.Len() * spanV;
-				if (width > 1e-6 && height > 1e-6) {
-					const double aspect = width / height;
-					a_aspect = aspect > 0.2 && aspect < 6.0 ? static_cast<float>(aspect) : 0.0f;
-				}
+				const double aspect = shapeFor(swap);
+				a_aspect = aspect > 0.2 && aspect < 6.0 ? static_cast<float>(aspect) : 0.0f;
 			};
 
 			// the largest flat face, plus any other big face parallel to it (the back, or a front split from it)
@@ -643,7 +665,7 @@ namespace fv::Screen
 				}
 				const int k = out.faces++;
 				out.face[k] = rect;
-				orientFace(islands[i].second, rect, pts, out.faceAspect[k], out.faceOrient[k]);
+				orientFace(islands[i].second, rect, pts, out.faceAspect[k], out.faceOrient[k], out.faceNormal[k], out.faceCenter[k]);
 			}
 			out.aspect = out.faceAspect[0];
 			out.flipHint = out.faceOrient[0];
@@ -847,7 +869,7 @@ namespace fv::Screen
 				choice.name = parts[1];
 			}
 			if (parts.size() > 2 && !parts[2].empty()) {
-				choice.flip = std::stoi(parts[2]) & 3;
+				choice.flip = std::stoi(parts[2]) & 15;
 			}
 			if (parts.size() > 3) {
 				choice.owner = parts[3];
@@ -1034,26 +1056,55 @@ namespace fv::Screen
 		// work out the screen face, which way is up, and whether the frame shares the texture
 		const auto shape = AnalyzeMesh(geom);
 		const int  userFlip = a_forceIndex >= 0 || saved.index >= 0 ? saved.flip : 0;
-		const int  flip = ((userFlip ^ shape.flipHint) & 3) | (shape.flipHint & 4);
+		const int  flip = (userFlip ^ shape.flipHint) & 7;
 		const auto inTexture = [](const std::array<float, 4>& r) { return r[0] >= -0.01f && r[1] >= -0.01f && r[2] <= 1.01f && r[3] <= 1.01f; };
 		const std::array<float, 4> whole{ shape.all.u0, shape.all.v0, shape.all.u1, shape.all.v1 };
-		const bool facesInTexture = shape.faces > 0 && inTexture(shape.face[0]) && (shape.faces < 2 || inTexture(shape.face[1]));
-		const bool rotated = (shape.flipHint & 4) != 0;
+		const bool rotated = (flip & 4) != 0;
 
-		a_binding.screenAspect = shape.aspect;
-		a_binding.faceCount = shape.faces;
-		for (int i = 0; i < 2; ++i) {
-			a_binding.faceRects[i] = shape.face[i];
-			a_binding.faceAspect[i] = shape.faceAspect[i];
-			a_binding.faceOrient[i] = ((userFlip ^ shape.faceOrient[i]) & 3) | (shape.faceOrient[i] & 4);
+		// which faces get the video: normally only the one facing you (Ctrl+Shift+F7 picks the other side)
+		std::vector<int> chosen;
+		for (int k = 0; k < shape.faces; ++k) {
+			chosen.push_back(k);
 		}
-		if (settings.composite && shape.partial && facesInTexture) {
-			a_binding.composite = true;  // frame shares the texture: video only inside the face(s)
+		if (shape.faces == 2 && !settings.bothSides) {
+			int front = 0;
+			if (auto* player = RE::PlayerCharacter::GetSingleton()) {
+				const auto eye = player->GetPosition();
+				float      best = -FLT_MAX;
+				for (int k = 0; k < 2; ++k) {
+					const auto  c = shape.faceCenter[k];
+					const auto  n = shape.faceNormal[k];
+					const float facing = n.x * (eye.x - c.x) + n.y * (eye.y - c.y) + n.z * (eye.z - c.z);
+					if (facing > best) {
+						best = facing;
+						front = k;
+					}
+				}
+			}
+			if (userFlip & 8) {
+				front = 1 - front;
+			}
+			chosen = { front };
+		}
+		const bool facesInTexture = std::ranges::all_of(chosen, [&](int k) { return inTexture(shape.face[k]); }) && !chosen.empty();
+
+		a_binding.screenAspect = chosen.empty() ? 0.0f : shape.faceAspect[chosen[0]];
+		a_binding.faceCount = static_cast<int>(chosen.size());
+		for (std::size_t i = 0; i < chosen.size() && i < 2; ++i) {
+			const int k = chosen[i];
+			a_binding.faceRects[i] = shape.face[k];
+			a_binding.faceAspect[i] = shape.faceAspect[k];
+			a_binding.faceOrient[i] = (userFlip ^ shape.faceOrient[k]) & 7;
+		}
+		const bool otherSideHidden = shape.faces == 2 && chosen.size() == 1;
+		if (settings.composite && (shape.partial || otherSideHidden) && facesInTexture) {
+			a_binding.composite = true;  // frame shares the texture (or we skip the back): video only inside the face
 		} else if (settings.composite && rotated && shape.all.ok && inTexture(whole)) {
 			// whole mesh is the screen but its texture lies sideways: draw the video rotated
 			a_binding.composite = true;
 			a_binding.faceCount = 1;
 			a_binding.faceRects[0] = whole;
+			a_binding.faceAspect[0] = a_binding.screenAspect;
 		}
 
 		if (!a_binding.composite && settings.fitUV) {
@@ -1086,16 +1137,22 @@ namespace fv::Screen
 			a_binding.flagsChanged = true;
 		}
 
-		// films made of stacked layers (Far Harbor's drive-in movie): hide the other layers while we play
-		if (a_binding.isEffect && geom->parent) {
-			const auto prefix = candidates[index].name.substr(0, candidates[index].name.find(':'));
-			for (auto& child : geom->parent->children) {
-				auto* other = child ? child->IsGeometry() : nullptr;
-				if (!other || other == geom || other->GetAppCulled()) {
-					continue;  // bit 0 = already app-culled (hidden)
+		// glowing layers drawn over the same spot (a TV's noise/glass overlays, the stills and credits of the
+		// drive-in movie) would cover the video: hide them while we play
+		if (a_binding.isEffect && settings.hideOverlays) {
+			std::vector<Candidate> layers;
+			Collect(candidates[index].root, {}, layers);
+			const auto& mine = geom->worldBound;
+			for (auto& c : layers) {
+				auto* other = c.geom;
+				auto* otherProp = GetShaderProperty(other);
+				if (other == geom || other->GetAppCulled() || !otherProp || !otherProp->material ||
+					otherProp->material->GetType() != RE::BSShaderMaterial::Type::kEffect) {
+					continue;
 				}
-				const auto otherName = Str(other->name);
-				if (!prefix.empty() && otherName.substr(0, otherName.find(':')) == prefix) {
+				const auto& theirs = other->worldBound;
+				const float reach = std::max(mine.fRadius, theirs.fRadius) * 1.2f;
+				if (mine.center.GetDistance(theirs.center) <= reach) {
 					other->SetAppCulled(true);
 					a_binding.hiddenLayers.emplace_back(other);
 				}
@@ -1206,6 +1263,15 @@ namespace fv::Screen
 			return static_cast<RE::BSEffectShaderMaterial*>(a_binding.material)->baseTexture.get() == a_binding.slotTexture.get();
 		}
 		return static_cast<RE::BSLightingShaderMaterialBase*>(a_binding.material)->diffuseTexture.get() == a_binding.slotTexture.get();
+	}
+
+	void KeepOverlaysHidden(const ScreenBinding& a_binding)
+	{
+		for (auto& layer : a_binding.hiddenLayers) {
+			if (layer && !layer->GetAppCulled()) {
+				layer->SetAppCulled(true);  // the film's own animation switched it back on
+			}
+		}
 	}
 
 	void ReapplyUV(const ScreenBinding& a_binding)
