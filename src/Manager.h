@@ -91,6 +91,7 @@ namespace fv
 
 		// Hotkey actions (main thread)
 		void HotkeyPlayNext();
+		bool RefuseUnsupported(RE::TESObjectREFR* a_ref);
 		void HotkeyTestPattern();
 		void HotkeyStop();
 		void HotkeyDump();

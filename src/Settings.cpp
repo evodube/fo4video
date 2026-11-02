@@ -94,6 +94,7 @@ namespace fv
 		pauseInMenus = ReadBool(L"General", L"bPauseInMenus", pauseInMenus);
 		pauseUnfocused = ReadBool(L"General", L"bPauseWhenAltTabbed", pauseUnfocused);
 		maxScreens = std::clamp(ReadInt(L"General", L"iMaxScreens", maxScreens), 1, 16);
+		onlySupportedScreens = ReadBool(L"General", L"bOnlySupportedScreens", onlySupportedScreens);
 
 		const auto names = Narrow(ReadString(L"Screen", L"sScreenNames", L""));
 		if (!names.empty()) {

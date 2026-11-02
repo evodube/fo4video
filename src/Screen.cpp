@@ -856,6 +856,35 @@ namespace fv::Screen
 		}
 	}
 
+	bool IsSupported(RE::TESObjectREFR* a_ref, std::string* a_what)
+	{
+		auto set = [&](const char* a_text) {
+			if (a_what) {
+				*a_what = a_text;
+			}
+		};
+		auto* root = a_ref ? a_ref->Get3D() : nullptr;
+		if (!root) {
+			set("not loaded");
+			return false;
+		}
+		const auto rootName = Lower(Str(root->name));
+		const auto key = Lower(ModelKey(a_ref));
+		std::vector<Candidate> meshes;
+		CollectRef(a_ref, false, meshes);
+		bool tv = false, votw = key.starts_with("votwmaster.esm"), cinema = rootName.find("drivein") != std::string::npos;
+		for (const auto& c : meshes) {
+			const auto name = Lower(c.name);
+			const auto tex = Lower(BaseTextureName(GetShaderProperty(c.geom)));
+			tv |= name.starts_with("screenanim");
+			votw |= tex.find("votw") != std::string::npos;
+			cinema |= name.find("driveinscreen") != std::string::npos || name.find("projectorlightbeam") != std::string::npos ||
+			          tex.find("drivein") != std::string::npos;
+		}
+		set(tv ? "TV" : votw ? "Videos of the Wasteland projector/screen" : cinema ? "drive-in cinema" : "not a TV, projector or cinema screen");
+		return tv || votw || cinema;
+	}
+
 	bool IsPlaceholderTexture(RE::NiTexture* a_tex)
 	{
 		if (!a_tex || !a_tex->rendererTexture) {

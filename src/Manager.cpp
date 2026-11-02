@@ -667,11 +667,28 @@ namespace fv
 		});
 	}
 
+	bool Manager::RefuseUnsupported(RE::TESObjectREFR* a_ref)
+	{
+		if (!Settings::Get().onlySupportedScreens) {
+			return false;
+		}
+		std::string what;
+		if (Screen::IsSupported(a_ref, &what)) {
+			return false;
+		}
+		log::info("{}: {}; F9/F10 ignored (bOnlySupportedScreens=1)", Screen::RefName(a_ref), what);
+		Notify("Real Videos: that isn't a TV, projector or cinema screen");
+		return true;
+	}
+
 	void Manager::HotkeyPlayNext()
 	{
 		auto ref = PickedRef();
 		if (!ref) {
 			Notify("Real Videos: open the console and click a TV first");
+			return;
+		}
+		if (RefuseUnsupported(ref.get())) {
 			return;
 		}
 		const auto videos = ListVideos();
@@ -689,6 +706,9 @@ namespace fv
 		auto ref = PickedRef();
 		if (!ref) {
 			Notify("Real Videos: open the console and click a TV first");
+			return;
+		}
+		if (RefuseUnsupported(ref.get())) {
 			return;
 		}
 		PlayTestPattern(ref.get());
