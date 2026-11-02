@@ -1014,7 +1014,7 @@ namespace fv::Screen
 					if (ContainsAny(name, { "beam", "light", "flare", "ray" }) || ContainsAny(tex, { "beam", "flare", "lightray" })) {
 						continue;  // the projector's light stays
 					}
-					// movie stills are only ever the film: hide them if their object is anywhere near the screen
+					// movie stills are only ever the film: hide them if their object is anywhere isNear the screen
 					// (a layer that is switched off has no up-to-date bounds, so go by the object's position)
 					const bool stills = ContainsAny(tex, { "moviefx", "moviestill", "drivein\\effects", "drivein/effects" });
 					const bool filmish = effect && (ContainsAny(tex, { "movie", "film" }) || ContainsAny(name, { "texholder", "movie", "film" }) ||
@@ -1024,14 +1024,14 @@ namespace fv::Screen
 					}
 					const auto& theirs = c.geom->worldBound;
 					const float boundDist = mine.center.GetDistance(theirs.center);
-					const bool  near = stills ? (refDist <= mine.fRadius * 2.0f + 2000.0f || boundDist <= mine.fRadius * 2.0f + theirs.fRadius)
+					const bool  isNear = stills ? (refDist <= mine.fRadius * 2.0f + 2000.0f || boundDist <= mine.fRadius * 2.0f + theirs.fRadius)
 					                          : boundDist <= std::max(mine.fRadius, theirs.fRadius) * 1.5f;
 					if (std::ranges::find(a_binding.filmLogged, c.geom) == a_binding.filmLogged.end()) {
 						a_binding.filmLogged.push_back(c.geom);
 						log::info("  film layer '{}' of {} tex '{}': object {:.0f} / bounds {:.0f} away (screen radius {:.0f}) -> {}", c.name, RefName(ref), tex,
-							refDist, boundDist, mine.fRadius, near ? "hide" : "too far, keep");
+							refDist, boundDist, mine.fRadius, isNear ? "hide" : "too far, keep");
 					}
-					if (near) {
+					if (isNear) {
 						HideLayer(a_binding, c.geom);
 					}
 				}
