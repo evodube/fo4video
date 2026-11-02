@@ -336,6 +336,7 @@ namespace fv::Screen
 			RE::NiPoint3          faceCenter[2]{};  // world-space centre
 			bool                  partial{ false };  // screen face uses only part of the texture (frame shares it)
 			bool                  skinned{ false };
+			double                windingVote{ 0.0 };
 		};
 
 		struct Vec3
@@ -583,7 +584,11 @@ namespace fv::Screen
 					}
 				}
 			}
-			const double windingSign = windingVote < 0.0 ? -1.0 : 1.0;
+			// NIF triangles are wound so the visible side follows the right-hand rule (that's how the exporters
+			// build them); the vote is only logged. Two-sided screens whose vertex normals all point one way cancel
+			// the vote out, and trusting it put the video on the back.
+			constexpr double windingSign = 1.0;
+			out.windingVote = windingVote;
 			auto orientFace = [&](std::uint32_t a_root, const std::array<float, 4>& a_rect, const std::vector<std::array<double, 5>>& a_pts,
 								  float& a_aspect, int& a_orient, RE::NiPoint3& a_normal, RE::NiPoint3& a_center) {
 				a_aspect = 0.0f;
@@ -891,8 +896,53 @@ namespace fv::Screen
 		return {};
 	}
 
+	namespace
+	{
+		// 0.10 changed the automatic orientation and side of the VotW projector screens; turns saved for them
+		// with older versions would now point the wrong way, so forget those once (mesh choices are kept).
+		void MigrateChoices()
+		{
+			static bool done = false;
+			if (done) {
+				return;
+			}
+			done = true;
+			if (::GetPrivateProfileIntA("Migration", "ProjectorTurns010", 0, kChoiceIni) != 0) {
+				return;
+			}
+			std::vector<char> buf(65536);
+			const auto        len = ::GetPrivateProfileSectionA("Screens.v4", buf.data(), static_cast<DWORD>(buf.size()), kChoiceIni);
+			int               reset = 0;
+			for (const char* line = buf.data(); line < buf.data() + len && *line; line += std::strlen(line) + 1) {
+				const std::string entry = line;
+				const auto        eq = entry.find('=');
+				if (eq == std::string::npos) {
+					continue;
+				}
+				const auto key = entry.substr(0, eq);
+				auto       value = entry.substr(eq + 1);
+				const auto b1 = value.find('|');
+				const auto b2 = b1 == std::string::npos ? std::string::npos : value.find('|', b1 + 1);
+				if (b2 == std::string::npos) {
+					continue;
+				}
+				const auto name = Lower(value.substr(b1 + 1, b2 - b1 - 1));
+				const auto b3 = value.find('|', b2 + 1);
+				const auto flip = value.substr(b2 + 1, b3 == std::string::npos ? std::string::npos : b3 - b2 - 1);
+				if ((name.starts_with("ref_attach_node") || name == "box001") && flip != "0" && !flip.empty()) {
+					value = value.substr(0, b2 + 1) + "0" + (b3 == std::string::npos ? std::string() : value.substr(b3));
+					::WritePrivateProfileStringA("Screens.v4", key.c_str(), value.c_str(), kChoiceIni);
+					++reset;
+				}
+			}
+			::WritePrivateProfileStringA("Migration", "ProjectorTurns010", "1", kChoiceIni);
+			log::info("reset {} saved projector-screen turn(s) from older versions", reset);
+		}
+	}
+
 	ScreenChoice LoadChoice(RE::TESObjectREFR* a_ref)
 	{
+		MigrateChoices();
 		ScreenChoice choice;
 		const auto   key = ModelKey(a_ref);
 		if (key.empty()) {
@@ -996,6 +1046,23 @@ namespace fv::Screen
 			gather(owner ? owner->GetParentCell() : nullptr);
 			if (auto* player = RE::PlayerCharacter::GetSingleton(); player && (!owner || player->GetParentCell() != owner->GetParentCell())) {
 				gather(player->GetParentCell());
+			}
+			// the film can live in a neighbouring cell (Rebuild's drive-in: screen and projector are in different
+			// cells), so look through every loaded cell
+			if (auto* tes = RE::TES::GetSingleton()) {
+				if (tes->interiorCell) {
+					gather(tes->interiorCell);
+				} else if (auto* grid = tes->gridCells) {
+					const auto dim = std::min<std::uint32_t>(grid->dimension, 15);
+					for (std::uint32_t x = 0; x < dim; ++x) {
+						for (std::uint32_t y = 0; y < dim; ++y) {
+							auto* gc = grid->Get(x, y);
+							if (gc && gc->cell && gc->cell->IsAttached()) {
+								gather(gc->cell);
+							}
+						}
+					}
+				}
 			}
 
 			const auto before = a_binding.hiddenLayers.size();
@@ -1230,10 +1297,11 @@ namespace fv::Screen
 			shape = AnalyzeMesh(geom, TextureAspect(a_binding.originalBase.get()));
 			// VotW's controlled ceiling projector screen is lowered by bones; its stored pose can't say which way is
 			// up, and the picture came out upside down
-			if (origTexLower.find("ceilingprojectorscreenclean") != std::string::npos && Lower(candidates[index].name).starts_with("ref_attach_node")) {
-				shape.flipHint ^= 1;
-				shape.faceOrient[0] ^= 1;
-				shape.faceOrient[1] ^= 1;
+			// (clean and dirty versions alike): turn it 180 degrees
+			if (origTexLower.find("ceilingprojectorscreen") != std::string::npos && Lower(candidates[index].name).starts_with("ref_attach_node")) {
+				shape.flipHint ^= 3;
+				shape.faceOrient[0] ^= 3;
+				shape.faceOrient[1] ^= 3;
 			}
 			flip = (userFlip ^ shape.flipHint) & 7;
 			const auto inTexture = [](const std::array<float, 4>& r) { return r[0] >= -0.01f && r[1] >= -0.01f && r[2] <= 1.01f && r[3] <= 1.01f; };
@@ -1247,6 +1315,7 @@ namespace fv::Screen
 			}
 			// how far in front of each face the player is (negative = behind it)
 			std::array<float, 2> facing{ 0.0f, 0.0f };
+			bool                 sidesOpposite = true;
 			if (auto* player = RE::PlayerCharacter::GetSingleton()) {
 				auto eye = player->GetPosition();
 				eye.z += 120.0f;  // roughly eye height
@@ -1259,12 +1328,20 @@ namespace fv::Screen
 			if (shape.faces == 2 && !settings.bothSides) {
 				// the side facing you; remembered for this mesh so Shift+F7 / F7 don't jump to the other side
 				static std::unordered_map<const RE::BSGeometry*, int> lastFront;
-				int  front = facing[1] > facing[0] ? 1 : 0;
+				const auto& n0 = shape.faceNormal[0];
+				const auto& n1 = shape.faceNormal[1];
+				sidesOpposite = n0.x * n1.x + n0.y * n1.y + n0.z * n1.z < -0.3f;
+				// sides that can't be told apart by their normals: the smaller face is the front on every VotW
+				// screen seen so far (Radiation Star, ceiling projector screen)
+				int  front = sidesOpposite ? (facing[1] > facing[0] ? 1 : 0) : 1;
 				auto it = lastFront.find(geom);
 				if (a_forceIndex >= 0 && it != lastFront.end()) {
 					front = it->second;
 				}
 				lastFront[geom] = front;
+				log::info("{}: sides: normals ({:.2f},{:.2f},{:.2f}) / ({:.2f},{:.2f},{:.2f}){}, you are {:.0f} / {:.0f} in front, winding vote {:.3g} -> face {}",
+					RefName(a_ref), n0.x, n0.y, n0.z, n1.x, n1.y, n1.z, sidesOpposite ? "" : " (not opposite: using the smaller face)", facing[0], facing[1],
+					shape.windingVote, front + 1);
 				if (userFlip & 8) {
 					front = 1 - front;
 				}
