@@ -1,6 +1,7 @@
 #include "Manager.h"
 
 #include "Compositor.h"
+#include "Remote.h"
 #include "Settings.h"
 
 namespace fv
@@ -28,7 +29,7 @@ namespace fv
 
 		RE::NiPointer<RE::TESObjectREFR> PickedRef()
 		{
-			return RE::Console::GetPickRef().get();
+			return Manager::Get().Target();
 		}
 
 		// Animated test card: scrolling hue gradient, a sweeping white bar,
@@ -645,7 +646,8 @@ namespace fv
 				const float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
 				const float gain = big ? Attenuate(dist, settings.bigMinDistance, settings.bigMaxDistance, settings.falloffCurve)
 				                       : Attenuate(dist, settings.minDistance, settings.maxDistance, settings.falloffCurve);
-				volume = settings.volume * p->userVolume * gain;
+				const auto& pr = _prefs[p->formID];
+				volume = pr.muted ? 0.0f : settings.volume * p->userVolume * pr.volume * gain;
 			}
 			p->volume = volume;
 		}
@@ -685,7 +687,7 @@ namespace fv
 	{
 		auto ref = PickedRef();
 		if (!ref) {
-			Notify("Real Videos: open the console and click a TV first");
+			Notify("Real Videos: aim at a TV, projector or cinema screen first");
 			return;
 		}
 		if (RefuseUnsupported(ref.get())) {
@@ -705,7 +707,7 @@ namespace fv
 	{
 		auto ref = PickedRef();
 		if (!ref) {
-			Notify("Real Videos: open the console and click a TV first");
+			Notify("Real Videos: aim at a TV, projector or cinema screen first");
 			return;
 		}
 		if (RefuseUnsupported(ref.get())) {
@@ -729,11 +731,135 @@ namespace fv
 	{
 		auto ref = PickedRef();
 		if (!ref) {
-			Notify("Real Videos: open the console and click a TV first");
+			Notify("Real Videos: aim at a TV, projector or cinema screen first");
 			return;
 		}
 		Screen::Dump(ref.get());
 		Notify(std::format("Real Videos: node dump of {} written to RealVideos.log", Screen::RefName(ref.get())));
+	}
+
+	RE::NiPointer<RE::TESObjectREFR> Manager::Target()
+	{
+		const auto& s = Settings::Get();
+		if (s.aimToSelect) {
+			if (auto* aimed = Screen::PickAimed(s.aimDistance)) {
+				return RE::NiPointer<RE::TESObjectREFR>(aimed);
+			}
+		}
+		return RE::Console::GetPickRef().get();
+	}
+
+	void Manager::RemotePlayPause(RE::TESObjectREFR* a_ref)
+	{
+		if (!a_ref) {
+			return;
+		}
+		{
+			std::scoped_lock lock(_lock);
+			for (auto& p : _players) {
+				if (p->formID == a_ref->GetFormID() && !p->stopping) {
+					p->userPaused = !p->userPaused;
+					Notify(std::format("Real Videos: {} {}", p->userPaused ? "paused" : "playing", p->name));
+					return;
+				}
+			}
+		}
+		RemoteStep(a_ref, 0);  // off: switch on with the current video
+	}
+
+	void Manager::RemoteStep(RE::TESObjectREFR* a_ref, int a_dir)
+	{
+		if (!a_ref || RefuseUnsupported(a_ref)) {
+			return;
+		}
+		const auto videos = ListVideos();
+		if (videos.empty()) {
+			Notify(std::format("Real Videos: no videos in {}", Narrow(Settings::Get().videoFolder)));
+			return;
+		}
+		// position of what's playing on this screen, else the shared "next video" counter
+		std::ptrdiff_t index = static_cast<std::ptrdiff_t>(_nextVideo % videos.size());
+		bool           playing = false;
+		{
+			std::scoped_lock lock(_lock);
+			for (auto& p : _players) {
+				if (p->formID == a_ref->GetFormID() && !p->stopping && p->kind == SourceKind::kVideo) {
+					const auto current = std::filesystem::path(p->file).filename().wstring();
+					for (std::size_t i = 0; i < videos.size(); ++i) {
+						if (_wcsicmp(std::filesystem::path(videos[i]).filename().wstring().c_str(), current.c_str()) == 0) {
+							index = static_cast<std::ptrdiff_t>(i);
+							playing = true;
+						}
+					}
+				}
+			}
+		}
+		if (playing) {
+			const auto n = static_cast<std::ptrdiff_t>(videos.size());
+			index = ((index + a_dir) % n + n) % n;
+		} else {
+			++_nextVideo;
+		}
+		Play(a_ref, videos[static_cast<std::size_t>(index)], Settings::Get().loop);
+	}
+
+	void Manager::RemotePlayFile(RE::TESObjectREFR* a_ref, const std::wstring& a_name)
+	{
+		if (!a_ref || RefuseUnsupported(a_ref)) {
+			return;
+		}
+		Play(a_ref, a_name, Settings::Get().loop);
+	}
+
+	void Manager::RemoteSetVolume(std::uint32_t a_formID, float a_volume)
+	{
+		std::scoped_lock lock(_lock);
+		_prefs[a_formID].volume = std::clamp(a_volume, 0.0f, 2.0f);
+	}
+
+	void Manager::RemoteSetMuted(std::uint32_t a_formID, bool a_muted)
+	{
+		std::scoped_lock lock(_lock);
+		_prefs[a_formID].muted = a_muted;
+	}
+
+	RemoteView Manager::View(std::uint32_t a_formID)
+	{
+		std::scoped_lock lock(_lock);
+		RemoteView v;
+		v.formID = a_formID;
+		if (auto it = _prefs.find(a_formID); it != _prefs.end()) {
+			v.volume = it->second.volume;
+			v.muted = it->second.muted;
+		}
+		for (auto& p : _players) {
+			if (p->formID == a_formID && !p->stopping) {
+				v.name = p->name;
+				v.playing = true;
+				v.paused = p->userPaused;
+				v.testPattern = p->kind == SourceKind::kTestPattern;
+				v.file = Narrow(std::filesystem::path(p->file).filename().wstring());
+			}
+		}
+		return v;
+	}
+
+	std::vector<RemoteView> Manager::Views()
+	{
+		std::vector<std::uint32_t> ids;
+		{
+			std::scoped_lock lock(_lock);
+			for (auto& p : _players) {
+				if (!p->stopping) {
+					ids.push_back(p->formID);
+				}
+			}
+		}
+		std::vector<RemoteView> out;
+		for (auto id : ids) {
+			out.push_back(View(id));
+		}
+		return out;
 	}
 
 	bool Manager::IsGamePaused() const
@@ -773,7 +899,7 @@ namespace fv
 		const bool a_flip = a_mode == 1 || a_mode == 3;
 		auto ref = PickedRef();
 		if (!ref) {
-			Notify("Real Videos: open the console and click a screen first");
+			Notify("Real Videos: aim at a screen first");
 			return;
 		}
 
@@ -845,7 +971,7 @@ namespace fv
 			return;
 		}
 
-		const std::array<int, 5> keys{ s.keyPlay, s.keyTestPattern, s.keyStop, s.keyDump, s.keyNextMesh };
+		const std::array<int, 6> keys{ s.keyPlay, s.keyTestPattern, s.keyStop, s.keyDump, s.keyNextMesh, s.keyRemote };
 		for (std::size_t i = 0; i < keys.size(); ++i) {
 			if (keys[i] <= 0) {
 				continue;
@@ -862,7 +988,8 @@ namespace fv
 						case 1: HotkeyTestPattern(); break;
 						case 2: HotkeyStop(); break;
 						case 3: HotkeyDump(); break;
-						default: HotkeyNextMesh(ctrl && shift ? 3 : ctrl ? 2 : shift ? 1 : 0); break;
+						case 4: HotkeyNextMesh(ctrl && shift ? 3 : ctrl ? 2 : shift ? 1 : 0); break;
+						default: Remote::Toggle(); break;
 						}
 					});
 				}
@@ -922,8 +1049,9 @@ namespace fv
 			// 1) get the newest picture into the video texture
 			bool          fresh = false;
 			std::uint32_t vw = 0, vh = 0;
+			const bool held = paused || p.userPaused;  // game pause or remote pause
 			if (p.kind == SourceKind::kTestPattern) {
-				if (!paused || p.pattern.empty()) {
+				if (!held || p.pattern.empty()) {
 					MakePattern(p.pattern, kPatternSize, kPatternSize, seconds);
 					const auto [tw, th] = FittedSize(kPatternSize, kPatternSize, letterboxAspect);
 					if (slot.Ensure(a_device, tw, th, srgb)) {
@@ -934,9 +1062,9 @@ namespace fv
 					}
 				}
 			} else if (p.media) {
-				p.media->SetPaused(paused);
+				p.media->SetPaused(held);
 				p.media->SetVolume(p.volume);
-				if (!paused && p.loop && p.media->Finished()) {
+				if (!held && p.loop && p.media->Finished()) {
 					p.media->Restart();
 				}
 				VideoFrame frame;

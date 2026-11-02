@@ -28,7 +28,10 @@ namespace fv
 		bool                     bothSides{ false };
 		bool                     hideOverlays{ true };       // hide glowing layers / film stills drawn over the screen while playing
 		bool                     classicTV{ true };
-		bool                     onlySupportedScreens{ true };  // F9/F10 only on TVs, VotW projectors/screens, the drive-in          // glowing TV screens: whole video, mesh UVs untouched (0.1 behaviour)
+		bool                     onlySupportedScreens{ true };
+		bool                     aimToSelect{ true };     // hotkeys and the remote use the screen under the crosshair
+		float                    aimDistance{ 15000.0f };
+		int                      keyRemote{ 0x75 };       // F6: open/close the remote  // F9/F10 only on TVs, VotW projectors/screens, the drive-in          // glowing TV screens: whole video, mesh UVs untouched (0.1 behaviour)
 		float                    nearbyRadius{ 15000.0f };    // projectors / Ctrl+F7 look for screens this close
 		float                    brightness{ 1.0f };
 		std::string              placeholderPrefix;  // empty = try "Textures\\" then ""

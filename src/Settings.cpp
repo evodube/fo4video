@@ -95,6 +95,9 @@ namespace fv
 		pauseUnfocused = ReadBool(L"General", L"bPauseWhenAltTabbed", pauseUnfocused);
 		maxScreens = std::clamp(ReadInt(L"General", L"iMaxScreens", maxScreens), 1, 16);
 		onlySupportedScreens = ReadBool(L"General", L"bOnlySupportedScreens", onlySupportedScreens);
+		aimToSelect = ReadBool(L"General", L"bAimToSelect", aimToSelect);
+		aimDistance = std::max(100.0f, ReadFloat(L"General", L"fAimDistance", aimDistance));
+		keyRemote = ReadInt(L"General", L"iKeyRemote", keyRemote);
 
 		const auto names = Narrow(ReadString(L"Screen", L"sScreenNames", L""));
 		if (!names.empty()) {

@@ -1,6 +1,7 @@
 #include "Manager.h"
 #include "Media.h"
 #include "Papyrus.h"
+#include "Remote.h"
 #include "Renderer.h"
 #include "Settings.h"
 
@@ -14,6 +15,9 @@ namespace
 			return;
 		}
 		switch (a_msg->type) {
+		case F4SE::MessagingInterface::kPostPostLoad:
+			fv::Remote::Register();
+			break;
 		case F4SE::MessagingInterface::kGameDataReady:
 			fv::log::info("game data ready");
 			fv::Settings::Get().Load();
@@ -49,7 +53,7 @@ extern "C" __declspec(dllexport) bool F4SEAPI F4SEPlugin_Load(const F4SE::LoadIn
 {
 	F4SE::Init(a_f4se, { .log = true, .logName = kName, .trampoline = false });
 
-	fv::log::info("Real Videos ({}) 0.16.0 loading on runtime {} ({})", kName, a_f4se->RuntimeVersion().string(),
+	fv::log::info("Real Videos ({}) 0.17.0 loading on runtime {} ({})", kName, a_f4se->RuntimeVersion().string(),
 		REX::FModule::IsRuntimeOG() ? "OG" : REX::FModule::IsRuntimeNG() ? "NG" : "AE");
 	if (!REX::FModule::IsRuntimeOG()) {
 		fv::log::warn("this build is tested on OG 1.10.163 only; texture loading falls back to an untested path");

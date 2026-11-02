@@ -885,6 +885,45 @@ namespace fv::Screen
 		return tv || votw || cinema;
 	}
 
+	RE::TESObjectREFR* PickAimed(float a_maxDistance)
+	{
+		auto* player = RE::PlayerCharacter::GetSingleton();
+		auto* camera = RE::PlayerCamera::GetSingleton();
+		if (!player || !camera || !camera->cameraRoot) {
+			return nullptr;
+		}
+		// where the camera is, looking where the player looks (pitch: positive = down)
+		const auto   origin = camera->cameraRoot->GetWorldTranslate();
+		const float  pitch = player->data.angle.x;
+		const float  yaw = player->data.angle.z;
+		const RE::NiPoint3 dir{ std::sin(yaw) * std::cos(pitch), std::cos(yaw) * std::cos(pitch), -std::sin(pitch) };
+
+		std::vector<std::pair<float, RE::TESObjectREFR*>> hits;
+		ForEachLoadedCell([&](RE::TESObjectCELL* a_cell) {
+			a_cell->ForEachReferenceInRange(origin, a_maxDistance + 3000.0f, [&](RE::TESObjectREFR* a_ref) {
+				auto* root = a_ref && !a_ref->IsActor() && !a_ref->IsDisabled() ? a_ref->Get3D() : nullptr;
+				if (!root || root->worldBound.fRadius <= 0.0f || std::ranges::find(hits, a_ref, &std::pair<float, RE::TESObjectREFR*>::second) != hits.end()) {
+					return RE::BSContainer::ForEachResult::kContinue;
+				}
+				const auto& b = root->worldBound;
+				const auto  oc = b.center - origin;
+				const float t = oc.Dot(dir);  // distance along the view line to the point nearest the object
+				const float miss2 = oc.SqrLength() - t * t;
+				if (t > -b.fRadius && t - b.fRadius < a_maxDistance && miss2 <= b.fRadius * b.fRadius) {
+					hits.emplace_back(t, a_ref);
+				}
+				return RE::BSContainer::ForEachResult::kContinue;
+			});
+		});
+		std::ranges::sort(hits, {}, &std::pair<float, RE::TESObjectREFR*>::first);
+		for (auto& [t, ref] : hits) {
+			if (IsSupported(ref)) {
+				return ref;
+			}
+		}
+		return nullptr;
+	}
+
 	bool IsPlaceholderTexture(RE::NiTexture* a_tex)
 	{
 		if (!a_tex || !a_tex->rendererTexture) {

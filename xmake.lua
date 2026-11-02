@@ -3,7 +3,7 @@
 includes("lib/commonlibf4")
 
 set_project("RealVideos")
-set_version("0.16.0")
+set_version("0.17.0")
 set_license("GPL-3.0")
 set_languages("c++23")
 set_warnings("allextra")
@@ -39,7 +39,8 @@ target("RealVideos", function()
         "NOMINMAX",
         "_CRT_SECURE_NO_WARNINGS",
         "_WIN32_WINNT=0x0A00",
-        "WINVER=0x0A00"
+        "WINVER=0x0A00",
+        "_SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING"
     )
 
     add_cxxflags(

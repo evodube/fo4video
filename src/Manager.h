@@ -64,6 +64,7 @@ namespace fv
 		std::atomic<float> volume{ 0.0f };
 		float              userVolume{ 1.0f };
 		std::atomic<bool>  stopping{ false };
+		std::atomic<bool>  userPaused{ false };  // paused from the remote
 		std::uint64_t      framesShown{ 0 };
 		int                rebindCooldown{ 0 };
 		std::uint32_t      lastVideoWidth{ 0 };
@@ -71,10 +72,33 @@ namespace fv
 		bool               compositeLogged{ false };
 	};
 
+	// What the remote shows about one screen (copied under the lock; safe on any thread).
+	struct RemoteView
+	{
+		std::uint32_t formID{ 0 };
+		std::string   name;
+		bool          playing{ false };
+		bool          paused{ false };
+		bool          testPattern{ false };
+		std::string   file;
+		float         volume{ 1.0f };
+		bool          muted{ false };
+	};
+
 	class Manager
 	{
 	public:
 		static Manager& Get();
+
+		// --- remote control (main thread unless noted) ---
+		RE::NiPointer<RE::TESObjectREFR> Target();          // screen under the crosshair, else the console pick
+		void RemotePlayPause(RE::TESObjectREFR* a_ref);
+		void RemoteStep(RE::TESObjectREFR* a_ref, int a_dir);  // +1 next video, -1 previous
+		void RemotePlayFile(RE::TESObjectREFR* a_ref, const std::wstring& a_name);
+		void RemoteSetVolume(std::uint32_t a_formID, float a_volume);  // any thread
+		void RemoteSetMuted(std::uint32_t a_formID, bool a_muted);     // any thread
+		RemoteView View(std::uint32_t a_formID);                      // any thread
+		std::vector<RemoteView> Views();                              // any thread: every playing screen
 
 		// --- main thread ---
 		bool Play(RE::TESObjectREFR* a_ref, const std::wstring& a_file, bool a_loop);
@@ -115,7 +139,13 @@ namespace fv
 		std::atomic<bool> _maintainPending{ false };
 		std::uint64_t     _frame{ 0 };
 		std::size_t       _nextVideo{ 0 };
-		std::array<bool, 5> _keyWasDown{};
+		std::array<bool, 6> _keyWasDown{};
+		struct Prefs
+		{
+			float volume{ 1.0f };
+			bool  muted{ false };
+		};
+		std::unordered_map<std::uint32_t, Prefs> _prefs;  // remote volume/mute per screen, kept across videos
 		bool                _wasPaused{ false };
 		bool                _inBuildMode{ false };
 	};

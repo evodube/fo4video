@@ -88,5 +88,8 @@ namespace fv
 		// True for objects Real Videos plays on: TVs (a ScreenAnim mesh), Videos of the Wasteland projectors and
 		// screens, and the drive-in cinema (screen and projector). a_what gets a short description for the log.
 		bool IsSupported(RE::TESObjectREFR* a_ref, std::string* a_what = nullptr);
+
+		// The nearest supported screen (see IsSupported) under the crosshair, within a_maxDistance. Main thread.
+		RE::TESObjectREFR* PickAimed(float a_maxDistance);
 	}
 }
