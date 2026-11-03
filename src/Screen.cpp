@@ -1279,6 +1279,7 @@ namespace fv::Screen
 			a_binding.effectMaterial = em;
 			a_binding.selfLit = true;
 			RebuildRenderPasses(created);
+			log::info("'{}': the whole mesh glows{}", a_binding.geometryName, alpha ? " (drawn after the world)" : "");
 		}
 	}
 
@@ -1864,5 +1865,30 @@ namespace fv::Screen
 				prop->controllers ? "yes" : "no");
 		}
 		log::info("==== end dump ({} candidates) ====", candidates.size());
+
+		// every mesh in the object, screen or not (frames, poles, lights...), and what draws it right now
+		std::function<void(RE::NiAVObject*, int)> walk = [&](RE::NiAVObject* a_obj, int a_depth) {
+			if (!a_obj || a_depth > 64) {
+				return;
+			}
+			if (auto* geom = a_obj->IsGeometry()) {
+				auto*       prop = GetShaderProperty(geom);
+				auto*       mat = prop ? prop->material : nullptr;
+				auto*       alpha = static_cast<RE::NiAlphaProperty*>(geom->properties[0].get());
+				std::string kind = !mat ? "none" : mat->GetType() == RE::BSShaderMaterial::Type::kEffect ? "effect" : "lighting";
+				log::info("  mesh '{}' shader={} tex='{}' alpha={} culled={} radius={:.0f}", Str(geom->name), kind, prop ? BaseTextureName(prop) : "",
+					alpha ? std::format("blend={} test={} flags={:#x}", alpha->GetAlphaBlending(), alpha->GetAlphaTesting(), alpha->flags.flags) : "none",
+					geom->GetAppCulled(), geom->worldBound.fRadius);
+				return;
+			}
+			if (auto* node = a_obj->IsNode()) {
+				for (auto& child : node->children) {
+					walk(child.get(), a_depth + 1);
+				}
+			}
+		};
+		log::info("==== all meshes of {} ====", RefName(a_ref));
+		walk(root, 0);
+		log::info("==== end ====");
 	}
 }

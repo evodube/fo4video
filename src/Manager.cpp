@@ -1328,6 +1328,12 @@ namespace fv
 			const bool  brightChanged = std::abs(pictureBright - p.lastPictureBrightness) > 0.0001f || std::abs(frameScale - p.lastFrameScale) > 0.01f;
 			p.lastPictureBrightness = pictureBright;
 			if (std::abs(frameScale - p.lastFrameScale) > 0.01f) {
+				static auto lastLog = std::chrono::steady_clock::time_point{};
+				if (std::chrono::steady_clock::now() - lastLog > std::chrono::seconds(3)) {
+					lastLog = std::chrono::steady_clock::now();
+					log::info("{}: glowing={} copy={} composite={} frame brightness {:.0f}% -> {:.0f}%", p.name, glowing, b.glowOverlay, composite,
+						p.lastFrameScale * 100.0f, frameScale * 100.0f);
+				}
 				p.lastFrameScale = frameScale;
 			}
 
@@ -1358,8 +1364,8 @@ namespace fv
 					want = slot.compSRV.Get();
 					if (!p.compositeLogged) {
 						p.compositeLogged = true;
-						log::info("{}: drawing video only inside the screen face ({}x{} texture, base {})", p.name, slot.compWidth, slot.compHeight,
-							baseSRV ? "original" : "black");
+						log::info("{}: drawing video only inside the screen face ({}x{} texture, base {}; glowing={} copy={} frame brightness {:.0f}%)", p.name,
+							slot.compWidth, slot.compHeight, baseSRV ? "original" : "black", glowing, b.glowOverlay, frameScale * 100.0f);
 					}
 				}
 			}
