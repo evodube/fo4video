@@ -632,6 +632,28 @@ namespace fv
 			_inBuildMode = buildMode;
 		}
 
+		// How lit the world is, for the back / frame / pole of glowing projector screens (they glow with the picture,
+		// so they're dimmed to look roughly like the rest of the world: dark at night, near normal by day)
+		{
+			float light = 0.5f * (settings.frameDay + settings.frameNight);
+			auto* cell = player ? player->parentCell : nullptr;
+			auto* cal = RE::Calendar::GetSingleton();
+			if (cell && cell->IsExterior() && cal && cal->gameHour) {
+				const float h = cal->gameHour->GetValue();
+				// full day 8-17, full night before 5 and after 20, ramps in between
+				float day = 0.0f;
+				if (h >= 8.0f && h <= 17.0f) {
+					day = 1.0f;
+				} else if (h > 5.0f && h < 8.0f) {
+					day = (h - 5.0f) / 3.0f;
+				} else if (h > 17.0f && h < 20.0f) {
+					day = (20.0f - h) / 3.0f;
+				}
+				light = settings.frameNight + (settings.frameDay - settings.frameNight) * day;
+			}
+			_frameLight = light;
+		}
+
 		for (auto& p : _players) {
 			if (p->stopping) {
 				continue;
@@ -1285,8 +1307,13 @@ namespace fv
 			}
 			const float pictureBright = (b.bigScreen ? settings.bigScreenBrightness : 1.0f) * screenBright;
 			const float pictureFx[4]{ pictureBright, 0.0f, static_cast<float>(std::fmod(seconds, 3600.0)), 0.0f };
-			const bool  brightChanged = std::abs(pictureBright - p.lastPictureBrightness) > 0.0001f;
+			// the glowing projector's own texture (back, frame, pole) dimmed to the world's light
+			const float frameScale = glowing && !b.glowOverlay ? _frameLight.load() : 1.0f;
+			const bool  brightChanged = std::abs(pictureBright - p.lastPictureBrightness) > 0.0001f || std::abs(frameScale - p.lastFrameScale) > 0.01f;
 			p.lastPictureBrightness = pictureBright;
+			if (std::abs(frameScale - p.lastFrameScale) > 0.01f) {
+				p.lastFrameScale = frameScale;
+			}
 
 			// 2) shared texture: paint the screen's own texture, then the video only inside the screen face
 			ID3D11ShaderResourceView* want = slot.srv.Get();
@@ -1310,7 +1337,7 @@ namespace fv
 						}
 						Compositor::Get().Compose(a_context, slot.compRTV.Get(), slot.compWidth, slot.compHeight, baseSRV, slot.srv.Get(),
 							std::span<const Compositor::Region>(regions.data(), static_cast<std::size_t>(std::clamp(b.faceCount, 0, 2))),
-							pictureBright != 1.0f ? pictureFx : nullptr, b.glowOverlay);
+							pictureBright != 1.0f ? pictureFx : nullptr, b.glowOverlay, frameScale);
 					}
 					want = slot.compSRV.Get();
 					if (!p.compositeLogged) {

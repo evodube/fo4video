@@ -24,7 +24,8 @@ namespace fv
 		void Compose(ID3D11DeviceContext* a_context, ID3D11RenderTargetView* a_target, std::uint32_t a_width, std::uint32_t a_height,
 			ID3D11ShaderResourceView* a_base, ID3D11ShaderResourceView* a_video, std::span<const Region> a_regions,
 			const float* a_fx = nullptr,  // a_fx: brightness, VHS strength, time (seconds) for the video regions
-			bool a_baseSeeThrough = false);  // alpha 0 outside the video regions (face-only glow)
+			bool a_baseSeeThrough = false,  // alpha 0 outside the video regions (face-only glow)
+			float a_baseScale = 1.0f);      // brightness of everything outside the video regions
 
 	private:
 		bool Init(ID3D11Device* a_device);

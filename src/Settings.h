@@ -48,7 +48,9 @@ namespace fv
 		bool  selfLit{ true };               // projector & cinema screens glow like TVs (same brightness day/night, any direction)
 		float selfLitBrightness{ 1.0f };
 		bool  selfLitLatePass{ true };
-		bool  selfLitFaceOnly{ true };       // only the video face glows; back, frame and pole stay lit by the world       // draw glowing screens after the world so nothing behind shows through
+		bool  selfLitFaceOnly{ false };      // experimental: glowing copy over the video face only (didn't show in game)
+		float frameDay{ 0.85f };             // glowing projectors: how bright the back/frame/pole are by day
+		float frameNight{ 0.12f };           // ... and at night (interiors: halfway)       // draw glowing screens after the world so nothing behind shows through
 		float bigScreenVHS{ 0.5f };          // big screens: VHS tape look, 0 = off, 1 = strong
 		float startVolume{ 0.5f };           // volume each screen starts at (the remote's middle button)
 		float bigMinDistance{ 1500.0f };

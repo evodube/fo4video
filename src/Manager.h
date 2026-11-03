@@ -75,6 +75,7 @@ namespace fv
 		std::uint32_t      lastVideoHeight{ 0 };
 		bool               compositeLogged{ false };
 		float              lastPictureBrightness{ 1.0f };  // render thread: redraw the composite when it changes
+		float              lastFrameScale{ 1.0f };
 	};
 
 	// What the remote shows about one screen (copied under the lock; safe on any thread).
@@ -164,5 +165,6 @@ namespace fv
 		std::unordered_map<std::uint32_t, Prefs> _prefs;  // remote volume/mute per screen, kept across videos
 		bool                _wasPaused{ false };
 		std::atomic<bool>   _inBuildMode{ false };
+		std::atomic<float>  _frameLight{ 0.5f };  // brightness for the non-video parts of glowing projector screens
 	};
 }

@@ -302,7 +302,7 @@ float4 PSMain(VSOut i) : SV_Target
 
 	void Compositor::Compose(ID3D11DeviceContext* a_context, ID3D11RenderTargetView* a_target, std::uint32_t a_width, std::uint32_t a_height,
 		ID3D11ShaderResourceView* a_base, ID3D11ShaderResourceView* a_video, std::span<const Region> a_regions, const float* a_fx,
-		bool a_baseSeeThrough)
+		bool a_baseSeeThrough, float a_baseScale)
 	{
 		if (!_ok || !a_target || !a_video) {
 			return;
@@ -335,7 +335,7 @@ float4 PSMain(VSOut i) : SV_Target
 		a_context->VSSetConstantBuffers(0, 1, &cb);
 		a_context->PSSetConstantBuffers(0, 1, &cb);
 
-		const float baseFx[4]{ 1.0f, 0.0f, 0.0f, a_baseSeeThrough ? 1.0f : 0.0f };
+		const float baseFx[4]{ a_baseScale, 0.0f, 0.0f, a_baseSeeThrough ? 1.0f : 0.0f };
 		if (a_base) {
 			Draw(a_context, a_width, a_height, Region{ 0, 0, static_cast<float>(a_width), static_cast<float>(a_height) }, a_base, _clamp.Get(), baseFx);
 		} else {

@@ -693,8 +693,11 @@ namespace fv::Remote
 			dirty |= Percent("Projector glow brightness", &s.selfLitBrightness, 4.0f, "100% = the video as is. Applies right away.");
 			dirty |= Checkbox("Glowing screens: draw after the world", &s.selfLitLatePass);
 			Tip("Stops what stands behind a screen (the drive-in's catwalk) from showing through the picture. Press Apply below.");
-			dirty |= Checkbox("Glowing screens: only the picture glows", &s.selfLitFaceOnly);
-			Tip("The back of the screen, its frame and pole stay lit by the world like without a video. Press Apply below.");
+			dirty |= Percent("Projector back/frame/pole by day", &s.frameDay, 1.0f,
+				"The parts of a glowing projector screen that aren't the picture, dimmed to match the world. Daytime.");
+			dirty |= Percent("Projector back/frame/pole at night", &s.frameNight, 1.0f, "Same, at night. Indoors uses halfway.");
+			dirty |= Checkbox("Experimental: glow only the picture (separate copy)", &s.selfLitFaceOnly);
+			Tip("Older approach that didn't show in game for some screens. Press Apply below.");
 			dirty |= Checkbox("Cinema: stretch to fill the screen", &s.bigScreenStretch);
 			dirty |= Percent("Cinema brightness", &s.bigScreenBrightness, 4.0f, "100% = as is, up to 400%. Only the drive-in screen. Applies right away.");
 			dirty |= Percent("Cinema VHS look", &s.bigScreenVHS, 1.0f, "Soft picture, colour bleed, faded colours, faint scanlines. 0% = off.");
