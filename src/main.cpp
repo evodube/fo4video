@@ -37,19 +37,6 @@ namespace
 	}
 }
 
-// F4SE 0.7.x (game 1.10.984 and 1.11.x) loads plugins by this; 0.6.23 (1.10.163) uses F4SEPlugin_Query below.
-F4SE_PLUGIN_VERSION = []() noexcept {
-	F4SE::PluginVersionData v{};
-	v.PluginName("RealVideos");
-	v.PluginVersion({ 0, 51, 0 });
-	v.AuthorName("evodube");
-	v.UsesAddressLibraryNG(true);
-	v.UsesAddressLibraryAE(true);
-	v.IsLayoutDependentNG(true);
-	v.IsLayoutDependentAE(true);
-	return v;
-}();
-
 extern "C" __declspec(dllexport) bool F4SEAPI F4SEPlugin_Query(const F4SE::QueryInterface* a_f4se, F4SE::PluginInfo* a_info)
 {
 	a_info->infoVersion = F4SE::PluginInfo::kVersion;
