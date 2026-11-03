@@ -806,14 +806,17 @@ namespace fv
 		});
 	}
 
-	// a video in Data\Videos\Autoplay (or a folder inside it)
+	// a video in Data\Videos\Playlists\Autoplay (or a folder inside it)
 	bool Manager::IsAutoplay(const std::wstring& a_file) const
 	{
 		std::error_code ec;
 		const auto      root = std::filesystem::absolute(std::filesystem::path(Settings::Get().videoFolder), ec);
 		const auto      rel = std::filesystem::path(a_file).lexically_relative(root);
-		const auto      first = rel.begin() != rel.end() ? rel.begin()->wstring() : std::wstring{};
-		return _wcsicmp(first.c_str(), L"Autoplay") == 0 && std::next(rel.begin()) != rel.end();
+		std::vector<std::wstring> parts;
+		for (const auto& part : rel) {
+			parts.push_back(part.wstring());
+		}
+		return parts.size() >= 3 && _wcsicmp(parts[0].c_str(), L"Playlists") == 0 && _wcsicmp(parts[1].c_str(), L"Autoplay") == 0;
 	}
 
 	// a random other video from the same Autoplay folder as a_file (the same one if it's the only one); full path
@@ -1276,7 +1279,7 @@ namespace fv
 						if (!r) {
 							return;
 						}
-						// Videos\Autoplay: nothing is remembered - coming back starts a different video from that folder
+						// Videos\Playlists\Autoplay: nothing is remembered - coming back starts a different video from that folder
 						if (s.kind == SourceKind::kVideo && IsAutoplay(s.file)) {
 							if (const auto next = PickAutoplay(s.file); !next.empty()) {
 								log::info("{}: Autoplay folder, a new video instead of carrying on", s.name);
