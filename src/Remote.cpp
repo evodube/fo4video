@@ -26,8 +26,8 @@ namespace fv::Remote
 		std::vector<std::wstring> g_videoFiles;
 		std::vector<std::string>  g_videoNames;
 		std::vector<std::string>  g_videoFolders;  // each video's folder ("" = the video folder itself)
-		std::string               g_browse;        // folder shown in the remote's list
-		char                      g_search[96]{};  // remote list search box
+		char                      g_search[96]{};  // the Videos panel's search box
+		std::vector<std::string>  g_openPlaylists;  // playlists unfolded in the Playlists panel
 		std::atomic<bool>         g_typing{ false };  // search box has the keyboard: W/A/S/D are letters, not walking
 
 		void Notify(const std::string& a_message)
@@ -228,11 +228,14 @@ namespace fv::Remote
 			kOpacity,
 			kBright,
 			kSeek,
-			kAll
+			kAll,
+			kPlaylists
 		};
 
-		bool g_listOpen = false;
-		bool g_scrollToCurrent = false;
+		bool   g_listOpen = false;       // the Videos (search) panel, left of the remote
+		bool   g_playlistsOpen = false;  // the Playlists panel, right of the remote
+		bool   g_scrollToCurrent = false;
+		ImVec4 g_remoteRect{};           // where the remote was drawn this frame (x, y, w, h)
 
 		// position / lock (saved in RealVideos_Screens.ini [Remote])
 		constexpr auto kStateIni = "Data\\F4SE\\Plugins\\RealVideos_Screens.ini";
@@ -255,6 +258,8 @@ namespace fv::Remote
 			g_locked = ::GetPrivateProfileIntA("Remote", "Locked", 0, kStateIni) != 0;
 			g_opacity = std::clamp(static_cast<float>(::GetPrivateProfileIntA("Remote", "Opacity", 100, kStateIni)) / 100.0f, 0.2f, 1.0f);
 			g_size = std::clamp(static_cast<float>(::GetPrivateProfileIntA("Remote", "Size", 100, kStateIni)) / 100.0f, 0.4f, 1.6f);
+			g_listOpen = ::GetPrivateProfileIntA("Remote", "VideosOpen", 0, kStateIni) != 0;
+			g_playlistsOpen = ::GetPrivateProfileIntA("Remote", "PlaylistsOpen", 0, kStateIni) != 0;
 			char x[32]{}, y[32]{};
 			::GetPrivateProfileStringA("Remote", "X", "", x, sizeof(x), kStateIni);
 			::GetPrivateProfileStringA("Remote", "Y", "", y, sizeof(y), kStateIni);
@@ -269,6 +274,8 @@ namespace fv::Remote
 			::WritePrivateProfileStringA("Remote", "Locked", g_locked ? "1" : "0", kStateIni);
 			::WritePrivateProfileStringA("Remote", "Opacity", std::format("{:.0f}", g_opacity * 100.0f).c_str(), kStateIni);
 			::WritePrivateProfileStringA("Remote", "Size", std::format("{:.0f}", g_size * 100.0f).c_str(), kStateIni);
+			::WritePrivateProfileStringA("Remote", "VideosOpen", g_listOpen ? "1" : "0", kStateIni);
+			::WritePrivateProfileStringA("Remote", "PlaylistsOpen", g_playlistsOpen ? "1" : "0", kStateIni);
 			::WritePrivateProfileStringA("Remote", "X", std::format("{:.0f}", g_pos.x).c_str(), kStateIni);
 			::WritePrivateProfileStringA("Remote", "Y", std::format("{:.0f}", g_pos.y).c_str(), kStateIni);
 		}
@@ -303,6 +310,7 @@ namespace fv::Remote
 
 		constexpr float kSunX = 1032, kSunY = 148, kSunR = 62;   // this screen's brightness, right of the top row
 		constexpr float kAllX = 93, kAllY = 148, kAllR = 62;     // every screen here on/off, left of the top row
+		constexpr float kTabX0 = 1060, kTabX1 = 1112, kTabY0 = 565, kTabY1 = 745;  // playlists tab, right edge
 		constexpr std::array<float, 4> kBrightSteps{ 0.25f, 0.5f, 0.75f, 1.0f };
 
 		// next (+1) or previous (-1) brightness step; going up past 100% wraps round to 25%
@@ -362,6 +370,9 @@ namespace fv::Remote
 			}
 			if ((a_x - kAllX) * (a_x - kAllX) + (a_y - kAllY) * (a_y - kAllY) <= kAllR * kAllR) {
 				return Key::kAll;
+			}
+			if (a_x >= kTabX0 && a_x <= kTabX1 && a_y >= kTabY0 && a_y <= kTabY1) {
+				return Key::kPlaylists;
 			}
 			return Key::kNone;
 		}
@@ -509,6 +520,25 @@ namespace fv::Remote
 				}
 			}
 
+			// playlists tab on the right edge: three lines and an arrow (points out when closed, in when open)
+			{
+				const ImU32 col = g_playlistsOpen ? kAccent : (a_hover == Key::kPlaylists ? kText : kIcon);
+				ImDrawListManager::AddRectFilled(dl, c.P(kTabX0, kTabY0), c.P(kTabX1, kTabY1), a_hover == Key::kPlaylists ? kKeyHover : kKey,
+					10.0f * c.s, 0);
+				for (int i = 0; i < 3; ++i) {
+					ImDrawListManager::AddRectFilled(dl, c.P(kTabX0 + 13, kTabY0 + 38 + i * 22), c.P(kTabX1 - 13, kTabY0 + 46 + i * 22), col,
+						3.0f * c.s, 0);
+				}
+				const float ay = kTabY0 + 140, mx = (kTabX0 + kTabX1) * 0.5f;
+				if (g_playlistsOpen) {
+					Line(c, mx + 7, ay - 14, mx - 7, ay, 6, col);
+					Line(c, mx - 7, ay, mx + 7, ay + 14, 6, col);
+				} else {
+					Line(c, mx - 7, ay - 14, mx + 7, ay, 6, col);
+					Line(c, mx + 7, ay, mx - 7, ay + 14, 6, col);
+				}
+			}
+
 			// every screen here: a power sign with "ALL" under it
 			{
 				ImDrawListManager::AddCircleFilled(dl, c.P(kAllX, kAllY), kAllR * c.s, KeyColor(Key::kAll, a_hover, a_down), 40);
@@ -591,11 +621,11 @@ namespace fv::Remote
 			case Key::kName:
 				g_listOpen = !g_listOpen;
 				g_scrollToCurrent = g_listOpen;
-				if (g_listOpen) {
-					std::scoped_lock lock(g_lock);
-					g_browse = a_view.playing ? a_view.folder : g_browse;  // open where the current video is
-					g_search[0] = 0;
-				}
+				SaveState();
+				break;
+			case Key::kPlaylists:
+				g_playlistsOpen = !g_playlistsOpen;
+				SaveState();
 				break;
 			case Key::kAll:
 				Post(a_target, [](RE::TESObjectREFR* a_ref) { Manager::Get().AllScreensToggle(a_ref); });
@@ -616,6 +646,174 @@ namespace fv::Remote
 				break;
 			default:
 				break;
+			}
+		}
+
+
+		// ---- the side panels: Videos (search, left of the remote) and Playlists (right of it) ----
+
+		std::string LowerAscii(std::string a_s)
+		{
+			for (auto& ch : a_s) {
+				ch = static_cast<char>(::tolower(static_cast<unsigned char>(ch)));
+			}
+			return a_s;
+		}
+
+		// "Playlists\\Horror\\..." -> "Horror"; anything else -> ""
+		std::string PlaylistOf(const std::string& a_folder)
+		{
+			constexpr std::string_view kRoot = "playlists\\";
+			const auto                lower = LowerAscii(a_folder);
+			if (lower.size() <= kRoot.size() || lower.compare(0, kRoot.size(), kRoot) != 0) {
+				return {};
+			}
+			const auto rest = a_folder.substr(kRoot.size());
+			return rest.substr(0, rest.find('\\'));
+		}
+
+		bool PanelBegin(const char* a_id, const char* a_title, ImVec2 a_pos, ImVec2 a_size, bool& a_open)
+		{
+			SetNextWindowPos(a_pos, ImGuiCond_Always, ImVec2{ 0.0f, 0.0f });
+			SetNextWindowSize(a_size, ImGuiCond_Always);
+			PushStyleColor(ImGuiCol_WindowBg, kBack);
+			PushStyleVar(ImGuiStyleVar_WindowRounding, 12.0f);
+			const bool shown = Begin(a_id, nullptr,
+				ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
+					ImGuiWindowFlags_NoSavedSettings);
+			if (shown) {
+				Text("%s", a_title);
+				SameLine();
+				const float hideW = 70.0f;
+				SetCursorPosX(std::max(GetCursorPosX(), a_size.x - hideW - 12.0f));
+				if (Button("Hide", ImVec2{ hideW, 0.0f })) {
+					a_open = false;
+					SaveState();
+				}
+				Separator();
+			}
+			return shown;
+		}
+
+		void PanelEnd()
+		{
+			End();
+			PopStyleVar(1);
+			PopStyleColor(1);
+		}
+
+		void SidePanels(std::uint32_t a_target, const RemoteView& a_view, float a_scale)
+		{
+			const float gap = 10.0f;
+			const float panelW = std::max(240.0f, 620.0f * a_scale);
+			const ImVec2 size{ panelW, g_remoteRect.w };
+			std::scoped_lock lock(g_lock);
+			const auto isCurrent = [&](std::size_t a_i) {
+				return a_view.playing && !a_view.testPattern && g_videoFolders[a_i] == a_view.folder &&
+				       _stricmp(Narrow(std::filesystem::path(g_videoFiles[a_i]).filename().wstring()).c_str(), a_view.file.c_str()) == 0;
+			};
+			const auto play = [&](std::size_t a_i) {
+				Post(a_target, [file = g_videoFiles[a_i]](RE::TESObjectREFR* a_ref) { Manager::Get().RemotePlayFile(a_ref, file); });
+			};
+
+			// Videos: search bar on top, matching videos below (videos only, never folders)
+			g_typing = false;
+			if (g_listOpen) {
+				if (PanelBegin("##RealVideosVideos", "Videos", ImVec2{ g_remoteRect.x - panelW - gap, g_remoteRect.y }, size, g_listOpen)) {
+					SetNextItemWidth(-1.0f);
+					InputTextWithHint("##RealVideosSearch", "Search videos...", g_search, sizeof(g_search));
+					g_typing = IsItemActive();
+					const auto query = LowerAscii(g_search);
+					std::size_t found = 0;
+					for (std::size_t i = 0; i < g_videoNames.size(); ++i) {
+						found += query.empty() || LowerAscii(g_videoNames[i]).find(query) != std::string::npos;
+					}
+					TextDisabled("%zu video%s", found, found == 1 ? "" : "s");
+					if (BeginChild("##RealVideosResults", ImVec2{ 0.0f, 0.0f }, 0, 0)) {
+						for (std::size_t i = 0; i < g_videoNames.size(); ++i) {
+							if (!query.empty() && LowerAscii(g_videoNames[i]).find(query) == std::string::npos) {
+								continue;
+							}
+							PushID(static_cast<int>(i));
+							const bool current = isCurrent(i);
+							if (Selectable(g_videoNames[i].c_str(), current)) {
+								play(i);
+							}
+							if (const auto pl = PlaylistOf(g_videoFolders[i]); !pl.empty()) {
+								SameLine();
+								TextDisabled("%s", pl.c_str());
+							}
+							if (current && g_scrollToCurrent) {
+								SetScrollHereY(0.5f);
+								g_scrollToCurrent = false;
+							}
+							PopID();
+						}
+					}
+					EndChild();
+				}
+				PanelEnd();
+			}
+
+			// Playlists: every folder in Videos\\Playlists; play from the start, or unfold and pick a video
+			if (g_playlistsOpen) {
+				if (PanelBegin("##RealVideosPlaylists", "Playlists", ImVec2{ g_remoteRect.x + g_remoteRect.z + gap, g_remoteRect.y }, size,
+						g_playlistsOpen)) {
+					std::vector<std::string> names;
+					for (const auto& f : g_videoFolders) {
+						if (auto pl = PlaylistOf(f); !pl.empty() && std::ranges::find(names, pl) == names.end()) {
+							names.push_back(pl);
+						}
+					}
+					if (BeginChild("##RealVideosPlaylistList", ImVec2{ 0.0f, 0.0f }, 0, 0)) {
+						if (names.empty()) {
+							TextWrapped("No playlists yet. Make folders in your video folder's Playlists folder, e.g. "
+										"Data\\Videos\\Playlists\\Horror, and put videos in them.");
+						}
+						const auto playing = PlaylistOf(a_view.folder);
+						for (std::size_t n = 0; n < names.size(); ++n) {
+							const auto& name = names[n];
+							PushID(static_cast<int>(n));
+							// play from its first video
+							if (Button("Play")) {
+								for (std::size_t i = 0; i < g_videoFolders.size(); ++i) {
+									if (PlaylistOf(g_videoFolders[i]) == name) {
+										play(i);
+										break;
+									}
+								}
+							}
+							SameLine();
+							auto       it = std::ranges::find(g_openPlaylists, name);
+							const bool unfolded = it != g_openPlaylists.end();
+							const auto label = std::format("{} {}", unfolded ? "v" : ">", name);
+							if (Selectable(label.c_str(), playing == name)) {
+								if (unfolded) {
+									g_openPlaylists.erase(it);
+								} else {
+									g_openPlaylists.push_back(name);
+								}
+							}
+							if (unfolded) {
+								Indent(24.0f);
+								for (std::size_t i = 0; i < g_videoNames.size(); ++i) {
+									if (PlaylistOf(g_videoFolders[i]) != name) {
+										continue;
+									}
+									PushID(static_cast<int>(i) + 100000);
+									if (Selectable(g_videoNames[i].c_str(), isCurrent(i))) {
+										play(i);
+									}
+									PopID();
+								}
+								Unindent(24.0f);
+							}
+							PopID();
+						}
+					}
+					EndChild();
+				}
+				PanelEnd();
 			}
 		}
 
@@ -712,106 +910,7 @@ namespace fv::Remote
 					}
 				}
 
-				// the video list under the name bar (search key / click the name): folders are playlists, search finds
-				// anything in any folder
-				g_typing = false;
-				if (g_listOpen) {
-					std::scoped_lock lock(g_lock);
-					SetCursorScreenPos(ImVec2{ origin.x + kBarX0 * scale, origin.y + h + 6.0f });
-					const float rowH = GetFontSize() + 8.0f;
-					const float listW = (kBarX1 - kBarX0) * scale;
-					SetNextItemWidth(listW);
-					InputTextWithHint("##RealVideosSearch", "Search...", g_search, sizeof(g_search));
-					g_typing = IsItemActive();
-					ImVec2 below{};
-					GetCursorScreenPos(&below);
-					SetCursorScreenPos(ImVec2{ origin.x + kBarX0 * scale, below.y + 4.0f });
-
-					const auto lower = [](std::string a_s) {
-						for (auto& ch : a_s) {
-							ch = static_cast<char>(::tolower(static_cast<unsigned char>(ch)));
-						}
-						return a_s;
-					};
-					const std::string query = lower(g_search);
-					const bool        searching = !query.empty();
-
-					// rows: back, subfolders of the browsed folder, then its videos (or every match when searching)
-					struct Row
-					{
-						int         kind;  // 0 back, 1 folder, 2 video
-						std::string label;
-						std::string folder;
-						std::size_t video;
-					};
-					std::vector<Row> rows;
-					if (!searching) {
-						if (!g_browse.empty()) {
-							const auto up = std::filesystem::path(g_browse).parent_path().string();
-							rows.push_back({ 0, "..  back", up, 0 });
-						}
-						std::vector<std::string> subs;
-						for (const auto& f : g_videoFolders) {
-							// the next folder level below the one being browsed
-							if (f.size() <= g_browse.size() || (!g_browse.empty() && (f.compare(0, g_browse.size(), g_browse) != 0 || f[g_browse.size()] != '\\'))) {
-								continue;
-							}
-							const auto rest = f.substr(g_browse.empty() ? 0 : g_browse.size() + 1);
-							const auto name = rest.substr(0, rest.find('\\'));
-							const auto full = g_browse.empty() ? name : g_browse + "\\" + name;
-							if (std::ranges::find(subs, full) == subs.end()) {
-								subs.push_back(full);
-							}
-						}
-						for (const auto& sub : subs) {
-							rows.push_back({ 1, "[+] " + std::filesystem::path(sub).filename().string(), sub, 0 });
-						}
-					}
-					for (std::size_t i = 0; i < g_videoNames.size(); ++i) {
-						if (searching ? lower(g_videoNames[i]).find(query) != std::string::npos : g_videoFolders[i] == g_browse) {
-							rows.push_back({ 2, searching && !g_videoFolders[i].empty() ? g_videoFolders[i] + "  /  " + g_videoNames[i] : g_videoNames[i],
-								g_videoFolders[i], i });
-						}
-					}
-
-					const float listH = std::max(1.0f, static_cast<float>(std::min<std::size_t>(rows.size(), 10))) * rowH + 12.0f;
-					if (BeginChild("##RealVideosList", ImVec2{ listW, listH }, 0, 0)) {
-						if (rows.empty()) {
-							TextDisabled(searching ? "Nothing found" : "No videos in the video folder");
-						}
-						std::string goTo;
-						bool        go = false;
-						for (std::size_t r = 0; r < rows.size(); ++r) {
-							const auto& row = rows[r];
-							PushID(static_cast<int>(r));
-							if (row.kind == 2) {
-								const auto i = row.video;
-								const bool current = view.playing && !view.testPattern && g_videoFolders[i] == view.folder &&
-								                     _stricmp(Narrow(std::filesystem::path(g_videoFiles[i]).filename().wstring()).c_str(), view.file.c_str()) == 0;
-								if (Selectable(row.label.c_str(), current)) {
-									Post(target, [file = g_videoFiles[i]](RE::TESObjectREFR* a_ref) { Manager::Get().RemotePlayFile(a_ref, file); });
-								}
-								if (current && g_scrollToCurrent) {
-									SetScrollHereY(0.5f);
-									g_scrollToCurrent = false;
-								}
-							} else {
-								PushStyleColor(ImGuiCol_Text, row.kind == 1 ? IM_COL32(120, 200, 255, 255) : IM_COL32(170, 170, 170, 255));
-								if (Selectable(row.label.c_str(), false)) {
-									goTo = row.folder;
-									go = true;
-								}
-								PopStyleColor(1);
-							}
-							PopID();
-						}
-						if (go) {
-							g_browse = goTo;
-						}
-					}
-					EndChild();
-					Dummy(ImVec2{ w, 8.0f });
-				}
+				g_remoteRect = ImVec4{ origin.x, origin.y, w, h };
 
 				if (IsKeyPressed(ImGuiKey_Escape, false)) {
 					open = false;
@@ -820,6 +919,9 @@ namespace fv::Remote
 			End();
 			PopStyleVar(3);
 			PopStyleColor(3);
+			if (open) {
+				SidePanels(target, view, scale);
+			}
 			if (!open && g_window) {
 				g_window->IsOpen = false;
 			}
@@ -910,6 +1012,12 @@ namespace fv::Remote
 			if (s.freeze) {
 				dirty |= Meters("...further away than##freeze", &s.freezeDistance, 300.0f, "Or whenever the screen isn't in front of you.");
 				dirty |= SliderFloat("...for longer than##freeze", &s.freezeSeconds, 0.0f, 120.0f, "%.0f s");
+			}
+			dirty |= Checkbox("Turn screens off while you're in another settlement", &s.offInOtherSettlement);
+			Tip("Uses the game's own build areas, so modded settlements work too. They remember the video and come back on when you "
+				"return. Out in the wasteland only the distance below counts.");
+			if (s.offInOtherSettlement) {
+				dirty |= SliderFloat("...after##settlement", &s.otherSettlementSeconds, 0.0f, 60.0f, "%.0f s");
 			}
 			dirty |= Checkbox("Turn screens off when you walk away", &s.autoOff);
 			Tip("Saves memory and frees the screen's place. It remembers the video and where it was, and carries on from there when "

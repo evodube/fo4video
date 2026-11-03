@@ -95,6 +95,8 @@ namespace fv
 		put(L"General", L"bPauseWhenAltTabbed", b(pauseUnfocused));
 		put(L"General", L"iMaxScreens", i(maxScreens));
 		put(L"General", L"bAutoOff", b(autoOff));
+		put(L"General", L"bOffInOtherSettlement", b(offInOtherSettlement));
+		put(L"General", L"fOtherSettlementSeconds", f(otherSettlementSeconds));
 		put(L"General", L"fAutoOffDistance", f(autoOffDistance));
 		put(L"General", L"fAutoOffSeconds", f(autoOffSeconds));
 		put(L"General", L"bFreezePicture", b(freeze));
@@ -156,6 +158,8 @@ namespace fv
 		pauseUnfocused = ReadBool(L"General", L"bPauseWhenAltTabbed", pauseUnfocused);
 		maxScreens = std::clamp(ReadInt(L"General", L"iMaxScreens", maxScreens), 1, 16);
 		autoOff = ReadBool(L"General", L"bAutoOff", autoOff);
+		offInOtherSettlement = ReadBool(L"General", L"bOffInOtherSettlement", offInOtherSettlement);
+		otherSettlementSeconds = std::clamp(ReadFloat(L"General", L"fOtherSettlementSeconds", otherSettlementSeconds), 0.0f, 600.0f);
 		autoOffDistance = std::max(0.0f, ReadFloat(L"General", L"fAutoOffDistance", autoOffDistance));
 		autoOffSeconds = std::clamp(ReadFloat(L"General", L"fAutoOffSeconds", autoOffSeconds), 0.0f, 3600.0f);
 		freeze = ReadBool(L"General", L"bFreezePicture", freeze);

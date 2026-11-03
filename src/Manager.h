@@ -74,6 +74,10 @@ namespace fv
 		std::atomic<bool>  brightenable{ false };  // projector / cinema screen (TVs stay as they are)
 		std::uint64_t      framesShown{ 0 };
 		int                rebindCooldown{ 0 };
+		RE::ObjectRefHandle workshop;      // the settlement (workbench) the screen is in, if any
+		bool               workshopChecked{ false };
+		bool               elsewhere{ false };  // you're in a different settlement
+		std::chrono::steady_clock::time_point elsewhereSince{};
 		bool               away{ false };  // further than the auto-off distance
 		std::chrono::steady_clock::time_point awaySince{};
 		bool               unseen{ false };  // far or out of view (freeze timer running)
@@ -182,7 +186,10 @@ namespace fv
 			RE::NiPoint3        where{};
 			float               wakeDistance{ 0.0f };
 			std::string         name;
+			RE::ObjectRefHandle workshop;  // its settlement: back on when you're in it again
 		};
+		RE::ObjectRefHandle _playerWorkshop;  // the settlement you're standing in (none = outside any)
+		bool                _playerWorkshopKnown{ false };
 		std::vector<Sleeper> _sleepers;
 		int  FreeSlot() const;
 		void StopLocked(Player& a_player);

@@ -39,6 +39,8 @@ namespace fv
 		// [Audio]
 		bool  enableAudio{ true };
 		float volume{ 1.0f };
+		bool  offInOtherSettlement{ true };  // screens turn off while you're in a different settlement
+		float otherSettlementSeconds{ 5.0f };
 		bool  autoOff{ true };               // screens you've walked away from turn off, and resume when you come back
 		float autoOffDistance{ 7000.0f };    // further than this (game units, ~100 m; never closer than you can hear it)
 		float autoOffSeconds{ 30.0f };       // ... for this long

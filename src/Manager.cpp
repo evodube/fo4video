@@ -26,6 +26,27 @@ namespace fv
 			}
 		}
 
+		// The settlement whose build area holds a_pos (looked for around a_near), or nullptr when it's outside any.
+		// Works for modded settlements too: it asks the game's own workshop system.
+		RE::TESObjectREFR* SettlementAt(const RE::TESObjectREFR& a_near, const RE::NiPoint3& a_pos)
+		{
+			auto* workshop = RE::Workshop::FindNearestValidWorkshop(a_near);
+			return workshop && RE::Workshop::IsLocationWithinBuildableArea(*workshop, a_pos) ? workshop : nullptr;
+		}
+
+		std::string SettlementName(RE::TESObjectREFR* a_workshop)
+		{
+			if (!a_workshop) {
+				return "outside any settlement";
+			}
+			if (auto* loc = a_workshop->GetCurrentLocation()) {
+				if (const auto name = RE::TESFullName::GetFullName(*loc); !name.empty()) {
+					return std::format("settlement '{}'", name);
+				}
+			}
+			return std::format("settlement (workbench {:08X})", a_workshop->GetFormID());
+		}
+
 		bool SameVideo(const std::wstring& a_a, const std::wstring& a_b)
 		{
 			return !a_a.empty() && _wcsicmp(std::filesystem::path(a_a).filename().c_str(), std::filesystem::path(a_b).filename().c_str()) == 0;
@@ -785,6 +806,20 @@ namespace fv
 			haveCam = true;
 		}
 
+		// which settlement you're in (about once a second)
+		{
+			static int every = 0;
+			if (player && settings.offInOtherSettlement && (++every % 6 == 0 || !_playerWorkshopKnown)) {
+				auto*      ws = SettlementAt(*player, playerPos);
+				const auto handle = ws ? ws->GetHandle() : RE::ObjectRefHandle{};
+				if (!_playerWorkshopKnown || handle.get().get() != _playerWorkshop.get().get()) {
+					log::info("you're now {}", SettlementName(ws));
+				}
+				_playerWorkshop = handle;
+				_playerWorkshopKnown = true;
+			}
+		}
+
 		for (auto& p : _players) {
 			if (p->stopping) {
 				continue;
@@ -880,19 +915,49 @@ namespace fv
 				p->frozen = false;
 			}
 
+			// the settlement this screen is in (once, while it's loaded)
+			if (!p->workshopChecked && p->binding.bound && settings.offInOtherSettlement) {
+				p->workshopChecked = true;
+				auto  owner = p->binding.owner.get();
+				auto* screen = owner ? owner.get() : ref.get();
+				auto* g = p->binding.geometry.get();
+				auto* ws = screen ? SettlementAt(*screen, g ? g->worldBound.center : screen->GetPosition()) : nullptr;
+				p->workshop = ws ? ws->GetHandle() : RE::ObjectRefHandle{};
+				log::info("{}: in {}", p->name, SettlementName(ws));
+			}
+			// you're in a different settlement: turn it off after a few seconds (back on when you return)
+			bool goOff = false;
+			if (settings.offInOtherSettlement && _playerWorkshopKnown) {
+				auto mine = p->workshop.get();
+				auto here = _playerWorkshop.get();
+				const auto now = std::chrono::steady_clock::now();
+				if (mine && here && mine.get() != here.get()) {
+					if (!p->elsewhere) {
+						p->elsewhere = true;
+						p->elsewhereSince = now;
+					} else if (now - p->elsewhereSince >= std::chrono::duration<float>(settings.otherSettlementSeconds)) {
+						goOff = true;
+					}
+				} else {
+					p->elsewhere = false;
+				}
+			}
+
 			// walked away: turn the screen off after a while (frees its decoder, textures and slot) and remember
 			// where it was, to carry on when you come back
-			if (settings.autoOff && player) {
+			if ((settings.autoOff || goOff) && player) {
 				auto*      g = p->binding.bound ? p->binding.geometry.get() : nullptr;
 				const auto where = g ? g->worldBound.center : ref->GetPosition();
 				const float limit = std::max(settings.autoOffDistance, p->binding.bigScreen ? settings.bigMaxDistance : settings.maxDistance);
 				const float ax = where.x - playerPos.x, ay = where.y - playerPos.y, az = where.z - playerPos.z;
 				const auto  now = std::chrono::steady_clock::now();
-				if (std::sqrt(ax * ax + ay * ay + az * az) > limit) {
+				const bool farAway = settings.autoOff && std::sqrt(ax * ax + ay * ay + az * az) > limit;
+				if (farAway || goOff) {
 					if (!p->away) {
 						p->away = true;
 						p->awaySince = now;
-					} else if (now - p->awaySince >= std::chrono::duration<float>(settings.autoOffSeconds)) {
+					}
+					if (goOff || now - p->awaySince >= std::chrono::duration<float>(settings.autoOffSeconds)) {
 						Sleeper s;
 						s.ref = p->ref;
 						s.formID = p->formID;
@@ -903,8 +968,14 @@ namespace fv
 						s.where = where;
 						s.wakeDistance = limit * 0.9f;  // a little closer than where it turned off, so it doesn't flicker on/off
 						s.name = p->name;
-						log::info("{}: you've been away {:.0f}s; turned off until you come back (at {:.0f}s)", p->name, settings.autoOffSeconds,
-							static_cast<double>(s.position) / 1e7);
+						s.workshop = p->workshop;
+						if (goOff) {
+							log::info("{}: you're in another settlement; turned off until you're back (at {:.0f}s)", p->name,
+								static_cast<double>(s.position) / 1e7);
+						} else {
+							log::info("{}: you've been away {:.0f}s; turned off until you come back (at {:.0f}s)", p->name, settings.autoOffSeconds,
+								static_cast<double>(s.position) / 1e7);
+						}
 						_sleepers.push_back(std::move(s));
 						StopLocked(*p);
 						continue;
@@ -989,7 +1060,13 @@ namespace fv
 					continue;
 				}
 				const float dx = it->where.x - playerPos.x, dy = it->where.y - playerPos.y, dz = it->where.z - playerPos.z;
-				if (std::sqrt(dx * dx + dy * dy + dz * dz) < it->wakeDistance && ref->Get3D()) {
+				const bool  near = std::sqrt(dx * dx + dy * dy + dz * dz) < it->wakeDistance;
+				// a screen in a settlement comes back when you're in that settlement, or close by outside any
+				// settlement; while you're in another settlement it stays off even if that one is next door
+				auto       mine = it->workshop.get();
+				auto       here = _playerWorkshopKnown ? _playerWorkshop.get() : RE::NiPointer<RE::TESObjectREFR>{};
+				const bool wake = settings.offInOtherSettlement && mine ? (here ? here.get() == mine.get() : near) : near;
+				if (wake && ref->Get3D()) {
 					if (auto* tasks = F4SE::GetTaskInterface()) {
 						tasks->AddTask([this, s = *it]() {
 							if (auto r = s.ref.get()) {
