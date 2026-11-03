@@ -152,7 +152,8 @@ namespace fv::Remote
 			kName,
 			kClose,
 			kLock,
-			kBacklight
+			kBacklight,
+			kOpacity
 		};
 
 		bool g_listOpen = false;
@@ -165,6 +166,8 @@ namespace fv::Remote
 		bool           g_havePos = false;
 		ImVec2         g_pos{};
 		bool           g_dragging = false;
+		float          g_opacity = 1.0f;
+		constexpr std::array<float, 5> kOpacitySteps{ 1.0f, 0.85f, 0.7f, 0.55f, 0.4f };
 		ImVec2         g_grab{};
 
 		void LoadState()
@@ -174,6 +177,7 @@ namespace fv::Remote
 			}
 			g_stateLoaded = true;
 			g_locked = ::GetPrivateProfileIntA("Remote", "Locked", 0, kStateIni) != 0;
+			g_opacity = std::clamp(static_cast<float>(::GetPrivateProfileIntA("Remote", "Opacity", 100, kStateIni)) / 100.0f, 0.2f, 1.0f);
 			char x[32]{}, y[32]{};
 			::GetPrivateProfileStringA("Remote", "X", "", x, sizeof(x), kStateIni);
 			::GetPrivateProfileStringA("Remote", "Y", "", y, sizeof(y), kStateIni);
@@ -186,6 +190,7 @@ namespace fv::Remote
 		void SaveState()
 		{
 			::WritePrivateProfileStringA("Remote", "Locked", g_locked ? "1" : "0", kStateIni);
+			::WritePrivateProfileStringA("Remote", "Opacity", std::format("{:.0f}", g_opacity * 100.0f).c_str(), kStateIni);
 			::WritePrivateProfileStringA("Remote", "X", std::format("{:.0f}", g_pos.x).c_str(), kStateIni);
 			::WritePrivateProfileStringA("Remote", "Y", std::format("{:.0f}", g_pos.y).c_str(), kStateIni);
 		}
@@ -215,6 +220,7 @@ namespace fv::Remote
 		constexpr float kPadX = 562, kPadY = 655, kPadR = 352, kOkR = 133;
 		constexpr float kBarX0 = 83, kBarY0 = 1298, kBarX1 = 1023, kBarY1 = 1453;
 		constexpr float kLightX = 1032, kLightY = 148, kLightR = 62;  // backlight, right of the top row
+		constexpr float kFadeX = 93, kFadeY = 148;                     // opacity, left of the top row
 
 		Key HitTest(float a_x, float a_y)  // design units
 		{
@@ -244,6 +250,9 @@ namespace fv::Remote
 			}
 			if ((a_x - kLightX) * (a_x - kLightX) + (a_y - kLightY) * (a_y - kLightY) <= kLightR * kLightR) {
 				return Key::kBacklight;
+			}
+			if ((a_x - kFadeX) * (a_x - kFadeX) + (a_y - kFadeY) * (a_y - kFadeY) <= kLightR * kLightR) {
+				return Key::kOpacity;
 			}
 			return Key::kNone;
 		}
@@ -384,6 +393,21 @@ namespace fv::Remote
 				}
 			}
 
+			// opacity: a half-filled circle, how see-through the remote is
+			{
+				ImDrawListManager::AddCircleFilled(dl, c.P(kFadeX, kFadeY), kLightR * c.s, KeyColor(Key::kOpacity, a_hover, a_down), 40);
+				ImDrawListManager::AddCircle(dl, c.P(kFadeX, kFadeY - 6), 24 * c.s, kIcon, 32, 5 * c.s);
+				ImDrawListManager::PathArcTo(dl, c.P(kFadeX, kFadeY - 6), 24 * c.s, 1.5707963f, 4.712389f, 20);
+				ImDrawListManager::PathFillConvex(dl, kIcon);
+				const auto pct = std::format("{:.0f}%", g_opacity * 100.0f);
+				const float size = 26.0f * c.s;
+				const float scale = size / std::max(1.0f, GetFontSize());
+				ImVec2      ts{};
+				CalcTextSize(&ts, pct.c_str(), nullptr, false, -1.0f);
+				const auto at = c.P(kFadeX, kFadeY + 38);
+				ImDrawListManager::AddText(dl, GetFont(), size, ImVec2{ at.x - ts.x * scale * 0.5f, at.y - ts.y * scale * 0.5f }, kIcon, pct.c_str());
+			}
+
 			// small close mark
 			Line(c, kDesignW - 52, 22, kDesignW - 22, 52, 6, a_hover == Key::kClose ? kText : IM_COL32(110, 110, 110, 255));
 			Line(c, kDesignW - 22, 22, kDesignW - 52, 52, 6, a_hover == Key::kClose ? kText : IM_COL32(110, 110, 110, 255));
@@ -440,6 +464,16 @@ namespace fv::Remote
 				g_locked = !g_locked;
 				SaveState();
 				break;
+			case Key::kOpacity:
+				{
+					std::size_t i = 0;
+					while (i < kOpacitySteps.size() && kOpacitySteps[i] > g_opacity + 0.01f) {
+						++i;
+					}
+					g_opacity = kOpacitySteps[(i + 1) % kOpacitySteps.size()];
+					SaveState();
+				}
+				break;
 			case Key::kBacklight:
 				if (a_view.canBacklight) {
 					mgr.RemoteCycleBacklight(a_target);
@@ -467,10 +501,15 @@ namespace fv::Remote
 			g_pos.x = std::clamp(g_pos.x, viewport->Pos.x - w * 0.5f, viewport->Pos.x + viewport->Size.x - w * 0.5f);
 			g_pos.y = std::clamp(g_pos.y, viewport->Pos.y, viewport->Pos.y + viewport->Size.y - h * 0.25f);
 			SetNextWindowPos(g_pos, ImGuiCond_Always, ImVec2{ 0.0f, 0.0f });
-			PushStyleColor(ImGuiCol_WindowBg, kBack);
+			const auto faded = [](ImU32 a_col) {
+				const auto a = static_cast<ImU32>(((a_col >> IM_COL32_A_SHIFT) & 0xFF) * g_opacity);
+				return (a_col & ~IM_COL32_A_MASK) | (a << IM_COL32_A_SHIFT);
+			};
+			PushStyleColor(ImGuiCol_WindowBg, faded(kBack));
 			PushStyleColor(ImGuiCol_ChildBg, kKey);
 			PushStyleColor(ImGuiCol_Border, kBack);
 			PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{ 0.0f, 0.0f });
+			PushStyleVar(ImGuiStyleVar_Alpha, std::max(0.4f, g_opacity));
 			PushStyleVar(ImGuiStyleVar_WindowRounding, 14.0f * scale * 2.0f);
 
 			bool open = true;
@@ -491,7 +530,14 @@ namespace fv::Remote
 					std::scoped_lock lock(g_lock);
 					label = !view.playing ? "POWER OFF" : view.testPattern ? "TEST PATTERN" : view.file;
 				}
-				DrawRemote(Canvas{ GetWindowDrawList(), origin, scale }, hover, down, view, label);
+				auto*     drawList = GetWindowDrawList();
+				const int firstVertex = drawList->VtxBuffer.Size;
+				DrawRemote(Canvas{ drawList, origin, scale }, hover, down, view, label);
+				if (g_opacity < 0.999f) {
+					for (int vi = firstVertex; vi < drawList->VtxBuffer.Size; ++vi) {
+						drawList->VtxBuffer.Data[vi].col = faded(drawList->VtxBuffer.Data[vi].col);
+					}
+				}
 				if (hovered && IsItemClicked(0)) {
 					if (hover == Key::kNone && !g_locked) {
 						g_dragging = true;  // grabbed an empty spot: move the remote
@@ -542,7 +588,7 @@ namespace fv::Remote
 				}
 			}
 			End();
-			PopStyleVar(2);
+			PopStyleVar(3);
 			PopStyleColor(3);
 			if (!open && g_window) {
 				g_window->IsOpen = false;
@@ -566,37 +612,54 @@ namespace fv::Remote
 		}
 	}
 
-	void Tick()
+	namespace
 	{
-		static bool walking = false;
-		const bool  open = g_window && g_window->IsOpen.load();
-		float       x = 0.0f, y = 0.0f;
-		if (open) {
-			DWORD pid = 0;
-			::GetWindowThreadProcessId(::GetForegroundWindow(), &pid);
-			if (pid == ::GetCurrentProcessId()) {  // the game has focus
-				auto down = [](int a_vk) { return (::GetAsyncKeyState(a_vk) & 0x8000) != 0; };
-				y = (down('W') ? 1.0f : 0.0f) - (down('S') ? 1.0f : 0.0f);
-				x = (down('D') ? 1.0f : 0.0f) - (down('A') ? 1.0f : 0.0f);
-				if (x != 0.0f && y != 0.0f) {
-					x *= 0.7071f;
-					y *= 0.7071f;
+		// While the remote is open: give the keyboard back to the game for walking (the menu framework tells the
+		// game to ignore keyboard and mouse), but switch off looking, attacking, activating, menus and the rest
+		// with an input-enable layer, so the mouse only drives the remote.
+		void GameInputForRemote(bool a_open)
+		{
+			using UE = RE::UserEvents::USER_EVENT_FLAG;
+			static RE::BSTSmartPointer<RE::BSInputEnableLayer> layer;
+			static bool                                        blocked = false;
+			auto*                                              inputs = RE::BSInputEnableManager::GetSingleton();
+			if (!inputs) {
+				return;
+			}
+			if (!layer) {
+				inputs->AllocateNewLayer(layer, "RealVideos remote");
+			}
+			const auto flags = static_cast<UE>(static_cast<std::int32_t>(UE::kLooking) | static_cast<std::int32_t>(UE::kActivate) |
+											   static_cast<std::int32_t>(UE::kMenu) | static_cast<std::int32_t>(UE::kConsole) |
+											   static_cast<std::int32_t>(UE::kPOVSwitch) | static_cast<std::int32_t>(UE::kFighting) |
+											   static_cast<std::int32_t>(UE::kSneaking) | static_cast<std::int32_t>(UE::kMainFour) |
+											   static_cast<std::int32_t>(UE::kWheelZoom) | static_cast<std::int32_t>(UE::kJumping) |
+											   static_cast<std::int32_t>(UE::kVATS));
+			if (a_open) {
+				if (layer && !blocked) {
+					inputs->EnableUserEvent(layer->layerID, flags, false, RE::UserEvents::SENDER_ID::kGameplay);
+					blocked = true;
 				}
+				if (auto* controls = RE::ControlMap::GetSingleton()) {
+					controls->ignoreKeyboardMouse = false;  // the framework set it when the remote opened
+				}
+			} else if (layer && blocked) {
+				inputs->EnableUserEvent(layer->layerID, flags, true, RE::UserEvents::SENDER_ID::kGameplay);
+				blocked = false;
 			}
 		}
-		const bool moving = x != 0.0f || y != 0.0f;
-		if (!moving && !walking) {
+	}
+
+	void Tick()
+	{
+		static bool active = false;
+		const bool  open = g_window && g_window->IsOpen.load();
+		auto*       tasks = F4SE::GetTaskInterface();
+		if (!tasks || (!open && !active)) {
 			return;
 		}
-		walking = moving;
-		if (auto* tasks = F4SE::GetTaskInterface()) {
-			// the menu sets the game to ignore keyboard and mouse; feed the movement in directly
-			tasks->AddTask([x, y]() {
-				if (auto* controls = RE::PlayerControls::GetSingleton()) {
-					controls->data.moveInputVec = RE::NiPoint2(x, y);
-				}
-			});
-		}
+		active = open;
+		tasks->AddTask([open]() { GameInputForRemote(open); });
 	}
 
 	void Register()

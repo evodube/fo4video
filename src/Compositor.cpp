@@ -32,24 +32,10 @@ VSOut VSMain(uint id : SV_VertexID)
 	return o;
 }
 
-float Hash(float2 p)
-{
-	return frac(sin(dot(p, float2(12.9898, 78.233))) * 43758.5453);
-}
-
-// Old VHS tape: soft picture, colour bleeding sideways, faint scanlines, tape noise, line jitter and a
-// tracking line slowly rolling down the picture. s = strength (0..1).
+// Old VHS tape look: soft picture, colour bleeding sideways, washed-out colours, faint scanlines.
+// s = strength (0..1). Nothing moves, so it's steady on a still frame.
 float3 VHS(float2 uv, float s, float t)
 {
-	float lineNo = floor(uv.y * 480.0);
-	float frame  = floor(t * 30.0);
-	// every line wobbles a little sideways
-	uv.x += (Hash(float2(lineNo, frame)) - 0.5) * 0.0016 * s;
-	// tracking line rolling down every ~14 s
-	float band   = frac(t / 14.0);
-	float inBand = 1.0 - smoothstep(0.0, 0.018, abs(uv.y - band));
-	uv.x += inBand * (Hash(float2(lineNo, frame + 7.0)) - 0.5) * 0.02 * s;
-
 	float  px = 0.0035 * s;  // colour bleed / softness
 	float3 c;
 	c.r = tex.Sample(smp, uv + float2(px, 0.0)).r;
@@ -58,16 +44,12 @@ float3 VHS(float2 uv, float s, float t)
 	float3 soft = (tex.Sample(smp, uv + float2(px * 0.7, 0.0)).rgb + tex.Sample(smp, uv - float2(px * 0.7, 0.0)).rgb) * 0.5;
 	c = lerp(c, soft, 0.35 * s);
 
-	// washed-out tape colours, slightly warm
 	float l = dot(c, float3(0.299, 0.587, 0.114));
 	c = lerp(float3(l, l, l), c, 1.0 - 0.18 * s);
 	c *= float3(1.0 + 0.03 * s, 1.0, 1.0 - 0.04 * s);
 	c = lerp(c, c * 0.92 + 0.04, 0.5 * s);  // lifted blacks
 
-	// scanlines and grain
 	c *= 1.0 - 0.10 * s * (0.5 + 0.5 * sin(uv.y * 240.0 * 6.2831853));
-	c += (Hash(uv * 731.0 + frame) - 0.5) * 0.07 * s;
-	c += inBand * (Hash(float2(uv.x * 97.0, frame)) - 0.3) * 0.25 * s;
 	return saturate(c);
 }
 
