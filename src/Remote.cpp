@@ -886,6 +886,19 @@ namespace fv::Remote
 		}
 	}
 
+	void Register()
+	{
+		if (!F4SEMenuFramework::IsInstalled()) {
+			log::info("F4SE Menu Framework not installed: the remote (F6) is unavailable, hotkeys still work");
+			return;
+		}
+		F4SEMenuFramework::SetSection("Real Videos");
+		F4SEMenuFramework::AddSectionItem("Now playing", RenderPage);
+		F4SEMenuFramework::AddSectionItem("Settings", RenderSettings);
+		g_window = F4SEMenuFramework::AddWindow(RenderWindow, true);
+		log::info("remote registered with F4SE Menu Framework{}", g_window ? "" : " (window could not be created)");
+	}
+
 	void Toggle()
 	{
 		if (!g_window) {
