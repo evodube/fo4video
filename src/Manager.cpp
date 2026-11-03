@@ -1394,9 +1394,27 @@ namespace fv
 		}
 		// what's playing on this screen: next / previous stay inside its folder (its playlist)
 		const auto current = CurrentVideo(a_ref);
+		const auto inFolder = [&](const std::wstring& a_folder) {
+			std::erase_if(videos, [&](const std::wstring& a_v) { return _wcsicmp(std::filesystem::path(a_v).parent_path().wstring().c_str(), a_folder.c_str()) != 0; });
+		};
 		if (!current.empty()) {
-			const auto folder = std::filesystem::path(current).parent_path().wstring();
-			std::erase_if(videos, [&](const std::wstring& a_v) { return _wcsicmp(std::filesystem::path(a_v).parent_path().wstring().c_str(), folder.c_str()) != 0; });
+			inFolder(std::filesystem::path(current).parent_path().wstring());
+		} else if (Settings::Get().shuffle) {
+			// shuffle never mixes folders: turning a screen on picks from the folder it last played from, or else from the
+			// videos directly in the video folder (not its subfolders) - unless there are none there
+			std::wstring folder;
+			if (auto it = _shuffleHistory.find(a_ref->GetFormID()); it != _shuffleHistory.end() && !it->second.empty()) {
+				folder = std::filesystem::path(it->second.back()).parent_path().wstring();
+			}
+			auto kept = videos;
+			inFolder(folder);
+			if (videos.empty()) {
+				videos = std::move(kept);
+				inFolder(L"");
+				if (videos.empty()) {
+					videos = ListVideos();
+				}
+			}
 		}
 		std::ptrdiff_t index = static_cast<std::ptrdiff_t>(_nextVideo % std::max<std::size_t>(videos.size(), 1));
 		bool           playing = false;

@@ -1039,8 +1039,9 @@ namespace fv::Remote
 			SeparatorText("Playback");
 			dirty |= Checkbox("Loop videos", &s.loop);
 			dirty |= Checkbox("Shuffle: play videos in random order", &s.shuffle);
-			Tip("Next, previous and turning a screen on pick a random video from the same folder (playlist), and when a "
-				"video ends another random one starts. Previous goes back to the one played before.");
+			Tip("Random videos, but only from the folder (playlist) the screen is playing from - folders never mix. Next and "
+				"turning a screen on pick a random one, a video that ends moves on to another, and previous goes back to the "
+				"one played before.");
 			dirty |= Checkbox("Pause in menus (Esc, Pip-Boy, loading...)", &s.pauseInMenus);
 			dirty |= Checkbox("Pause when the game is in the background (alt-tab)", &s.pauseUnfocused);
 			dirty |= SliderInt("Screens playing at once", &s.maxScreens, 1, 20, "%d");
