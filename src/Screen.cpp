@@ -1250,6 +1250,15 @@ namespace fv::Screen
 						log::warn("'{}': the glowing shader doesn't fit this mesh; staying lit by the world", a_binding.geometryName);
 						return;
 					}
+					// The copy is blended by the picture's alpha (1 on the video, 0 elsewhere). Setup switches vertex
+					// colours on when the mesh has them, and their alpha (often 0 on these meshes) then hid the whole
+					// copy. Nothing but the texture may decide what's see-through.
+					const auto flagsBefore = created->flags.underlying();
+					created->SetFlag(F::kVertexAlpha, false);
+					created->SetFlag(F::kVertexColors, false);
+					created->alpha = 1.0f;
+					em->baseColor = RE::NiColorA{ 1.0f, 1.0f, 1.0f, 1.0f };
+					log::info("'{}': glowing copy shader flags {:#x} -> {:#x}", a_binding.geometryName, flagsBefore, created->flags.underlying());
 					copy->properties[1] = keep;
 					copy->name = RE::BSFixedString(kGlowName);
 					RE::NiPoint3 offset{};
