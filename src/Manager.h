@@ -208,6 +208,8 @@ namespace fv
 		std::vector<Sleeper> _sleepers;
 		RemoteView ViewLocked(std::uint32_t a_formID);
 		void       OpenMedia(Player* a_target, std::uint64_t a_serial, bool a_audio, bool a_gpu);
+		bool         IsAutoplay(const std::wstring& a_file) const;
+		std::wstring PickAutoplay(const std::wstring& a_file);
 		void       FallBackToCpuLocked(Player& a_player, const std::string& a_why);
 		std::mutex                                   _viewLock;   // the remote's last known views (its UI thread never waits on _lock)
 		std::unordered_map<std::uint32_t, RemoteView> _viewCache;

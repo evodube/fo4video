@@ -806,6 +806,40 @@ namespace fv
 		});
 	}
 
+	// a video in Data\Videos\Autoplay (or a folder inside it)
+	bool Manager::IsAutoplay(const std::wstring& a_file) const
+	{
+		std::error_code ec;
+		const auto      root = std::filesystem::absolute(std::filesystem::path(Settings::Get().videoFolder), ec);
+		const auto      rel = std::filesystem::path(a_file).lexically_relative(root);
+		const auto      first = rel.begin() != rel.end() ? rel.begin()->wstring() : std::wstring{};
+		return _wcsicmp(first.c_str(), L"Autoplay") == 0 && std::next(rel.begin()) != rel.end();
+	}
+
+	// a random other video from the same Autoplay folder as a_file (the same one if it's the only one); full path
+	std::wstring Manager::PickAutoplay(const std::wstring& a_file)
+	{
+		std::error_code ec;
+		const auto      root = std::filesystem::absolute(std::filesystem::path(Settings::Get().videoFolder), ec);
+		const auto      folder = std::filesystem::path(a_file).lexically_relative(root).parent_path().wstring();
+		std::vector<std::wstring> pool, all;
+		for (const auto& v : ListVideos()) {
+			if (_wcsicmp(std::filesystem::path(v).parent_path().wstring().c_str(), folder.c_str()) != 0) {
+				continue;
+			}
+			const auto full = ResolveVideoPath(v);
+			all.push_back(full);
+			if (_wcsicmp(full.c_str(), a_file.c_str()) != 0) {
+				pool.push_back(full);
+			}
+		}
+		auto& from = pool.empty() ? all : pool;
+		if (from.empty()) {
+			return {};
+		}
+		return from[std::uniform_int_distribution<std::size_t>(0, from.size() - 1)(_rng)];
+	}
+
 	bool Manager::Play(RE::TESObjectREFR* a_ref, const std::wstring& a_file, bool a_loop)
 	{
 		return Start(a_ref, SourceKind::kVideo, ResolveVideoPath(a_file), a_loop);
@@ -1238,7 +1272,19 @@ namespace fv
 				_lastWake = now;
 				if (auto* tasks = F4SE::GetTaskInterface()) {
 					tasks->AddTask([this, s = *best]() {
-						if (auto r = s.ref.get(); r && Start(r.get(), s.kind, s.file, s.loop, s.position, true) && s.paused) {
+						auto r = s.ref.get();
+						if (!r) {
+							return;
+						}
+						// Videos\Autoplay: nothing is remembered - coming back starts a different video from that folder
+						if (s.kind == SourceKind::kVideo && IsAutoplay(s.file)) {
+							if (const auto next = PickAutoplay(s.file); !next.empty()) {
+								log::info("{}: Autoplay folder, a new video instead of carrying on", s.name);
+								Start(r.get(), SourceKind::kVideo, next, s.loop, 0, true);
+								return;
+							}
+						}
+						if (Start(r.get(), s.kind, s.file, s.loop, s.position, true) && s.paused) {
 							std::scoped_lock lock(_lock);
 							for (auto& p : _players) {
 								if (!p->stopping && Is(*p, s.formID)) {
