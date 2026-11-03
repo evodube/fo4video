@@ -112,7 +112,7 @@ namespace fv::Remote
 			}
 			if (v.brightenable) {
 				float bright = v.brightness * 100.0f;
-				if (SliderFloat("Brightness", &bright, 25.0f, 400.0f, "%.0f%%")) {
+				if (SliderFloat("Brightness", &bright, 25.0f, 100.0f, "%.0f%%")) {
 					Manager::Get().RemoteSetBrightness(a_formID, bright / 100.0f);
 				}
 			}
@@ -180,7 +180,6 @@ namespace fv::Remote
 		float          g_opacity = 1.0f;
 		float          g_size = 1.0f;  // remote size (1 = half the screen height)
 		bool           g_resizing = false;
-		constexpr std::array<float, 5> kOpacitySteps{ 1.0f, 0.85f, 0.7f, 0.55f, 0.4f };
 		ImVec2         g_grab{};
 
 		void LoadState()
@@ -234,11 +233,10 @@ namespace fv::Remote
 		} };
 		constexpr float kPadX = 562, kPadY = 655, kPadR = 352, kOkR = 133;
 		constexpr float kBarX0 = 83, kBarY0 = 1298, kBarX1 = 1023, kBarY1 = 1453;
-		constexpr float kFadeX = 93, kFadeY = 148, kFadeR = 62;  // opacity, left of the top row
 		constexpr float kSunX = 1032, kSunY = 148, kSunR = 62;   // this screen's brightness, right of the top row
-		constexpr std::array<float, 12> kBrightSteps{ 0.25f, 0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 1.75f, 2.0f, 2.5f, 3.0f, 3.5f, 4.0f };
+		constexpr std::array<float, 4> kBrightSteps{ 0.25f, 0.5f, 0.75f, 1.0f };
 
-		// next (+1) or previous (-1) brightness step; going up past 400% wraps round to 25%
+		// next (+1) or previous (-1) brightness step; going up past 100% wraps round to 25%
 		float BrightStep(float a_now, int a_dir)
 		{
 			std::size_t i = 0;
@@ -286,9 +284,6 @@ namespace fv::Remote
 			}
 			if (!g_locked && a_x >= kDesignW - 95 && a_y >= kDesignH - 95 && a_x > kBarX1) {
 				return Key::kResize;
-			}
-			if ((a_x - kFadeX) * (a_x - kFadeX) + (a_y - kFadeY) * (a_y - kFadeY) <= kFadeR * kFadeR) {
-				return Key::kOpacity;
 			}
 			if ((a_x - kSunX) * (a_x - kSunX) + (a_y - kSunY) * (a_y - kSunY) <= kSunR * kSunR) {
 				return Key::kBright;
@@ -422,21 +417,6 @@ namespace fv::Remote
 				}
 			}
 
-			// opacity: a half-filled circle, how see-through the remote is
-			{
-				ImDrawListManager::AddCircleFilled(dl, c.P(kFadeX, kFadeY), kFadeR * c.s, KeyColor(Key::kOpacity, a_hover, a_down), 40);
-				ImDrawListManager::AddCircle(dl, c.P(kFadeX, kFadeY - 6), 24 * c.s, kIcon, 32, 5 * c.s);
-				ImDrawListManager::PathArcTo(dl, c.P(kFadeX, kFadeY - 6), 24 * c.s, 1.5707963f, 4.712389f, 20);
-				ImDrawListManager::PathFillConvex(dl, kIcon);
-				const auto pct = std::format("{:.0f}%", g_opacity * 100.0f);
-				const float size = 26.0f * c.s;
-				const float scale = size / std::max(1.0f, GetFontSize());
-				ImVec2      ts{};
-				CalcTextSize(&ts, pct.c_str(), nullptr, false, -1.0f);
-				const auto at = c.P(kFadeX, kFadeY + 38);
-				ImDrawListManager::AddText(dl, GetFont(), size, ImVec2{ at.x - ts.x * scale * 0.5f, at.y - ts.y * scale * 0.5f }, kIcon, pct.c_str());
-			}
-
 			// brightness of this screen: a little sun and the percentage (dim on TVs: they stay as they are)
 			{
 				const bool  usable = a_view.brightenable;
@@ -517,16 +497,6 @@ namespace fv::Remote
 			case Key::kLock:
 				g_locked = !g_locked;
 				SaveState();
-				break;
-			case Key::kOpacity:
-				{
-					std::size_t i = 0;
-					while (i < kOpacitySteps.size() && kOpacitySteps[i] > g_opacity + 0.01f) {
-						++i;
-					}
-					g_opacity = kOpacitySteps[(i + 1) % kOpacitySteps.size()];
-					SaveState();
-				}
 				break;
 			default:
 				break;
@@ -728,7 +698,6 @@ namespace fv::Remote
 			dirty |= Checkbox("Cinema: stretch to fill the screen", &s.bigScreenStretch);
 			dirty |= Percent("Cinema brightness", &s.bigScreenBrightness, 4.0f, "100% = as is, up to 400%. Only the drive-in screen. Applies right away.");
 			dirty |= Percent("Cinema VHS look", &s.bigScreenVHS, 1.0f, "Soft picture, colour bleed, faded colours, faint scanlines. 0% = off.");
-			dirty |= Percent("TV brightness (glowing screens)", &s.brightness, 4.0f, "Brightness of TVs and other glowing screens, up to 400%.");
 			dirty |= Checkbox("Projectors: draw the video only inside the screen", &s.composite);
 			Tip("Off: the video covers the whole mesh, frame included.");
 			dirty |= Checkbox("Two-sided screens: show on both sides", &s.bothSides);
@@ -753,18 +722,25 @@ namespace fv::Remote
 			Tip("Applies when a video starts.");
 			dirty |= Percent("Master volume", &s.volume, 2.0f, "Every screen.");
 			dirty |= Percent("Volume a screen starts at", &s.startVolume, 2.0f, "What the remote's middle button starts at.");
-			dirty |= Meters("TVs/projectors: full volume within", &s.minDistance, 50.0f, "");
-			dirty |= Meters("TVs/projectors: silent beyond", &s.maxDistance, 150.0f, "");
+			TextWrapped("How far away you can hear a screen. Closer than the first distance it plays at full volume; walking "
+						"away from there it gets quieter, and past the second distance you can't hear it at all.");
+			dirty |= Meters("TVs & projectors: full volume up to", &s.minDistance, 50.0f,
+				"Stand this close or closer and you hear the TV or projector at full volume.");
+			dirty |= Meters("TVs & projectors: can't be heard past", &s.maxDistance, 150.0f,
+				"Further away than this the TV or projector is silent.");
 			if (s.maxDistance < s.minDistance + 1.0f) {
 				s.maxDistance = s.minDistance + 1.0f;
 			}
-			dirty |= Meters("Cinema: full volume within", &s.bigMinDistance, 150.0f, "");
-			dirty |= Meters("Cinema: silent beyond", &s.bigMaxDistance, 600.0f, "");
+			dirty |= Meters("Cinema: full volume up to", &s.bigMinDistance, 150.0f,
+				"Within this distance of the drive-in screen you hear the film at full volume.");
+			dirty |= Meters("Cinema: can't be heard past", &s.bigMaxDistance, 600.0f,
+				"Further from the drive-in screen than this the film is silent.");
 			if (s.bigMaxDistance < s.bigMinDistance + 1.0f) {
 				s.bigMaxDistance = s.bigMinDistance + 1.0f;
 			}
-			dirty |= SliderFloat("Fade with distance", &s.falloffCurve, 0.5f, 4.0f, "%.1f");
-			Tip("1 = fades evenly, 2 = smooth (default), higher = quieter sooner.");
+			dirty |= SliderFloat("How it fades between the two", &s.falloffCurve, 0.5f, 4.0f, "%.1f");
+			Tip("1 = gets quieter at an even rate, 2 = natural (default), higher = drops off quickly once you step back.");
+			TextDisabled("Fade: 1 = even, 2 = natural, higher = quieter sooner.");
 
 			SeparatorText("Remote");
 			{

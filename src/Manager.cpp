@@ -968,7 +968,7 @@ namespace fv
 				const auto key = static_cast<std::uint32_t>(std::stoul(line.substr(0, eq), nullptr, 16));
 				const float value = std::stof(line.substr(eq + 1));
 				if (key) {
-					_prefs[key].brightness = std::clamp(value, 0.25f, 4.0f);
+					_prefs[key].brightness = std::clamp(value, 0.25f, 1.0f);
 				}
 			} catch (...) {
 			}
@@ -980,7 +980,7 @@ namespace fv
 		std::scoped_lock lock(_lock);
 		LoadBrightnessLocked();
 		const auto  key = PrefKeyLocked(a_formID);
-		const float value = std::clamp(a_brightness, 0.25f, 4.0f);
+		const float value = std::clamp(a_brightness, 0.25f, 1.0f);
 		_prefs[key].brightness = value;
 		for (auto& p : _players) {
 			if (Is(*p, a_formID)) {
