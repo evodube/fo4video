@@ -661,6 +661,13 @@ namespace fv::Remote
 			return changed;
 		}
 
+		void ApplyNow()
+		{
+			if (auto* tasks = F4SE::GetTaskInterface()) {
+				tasks->AddTask([]() { Manager::Get().RebindAll(); });
+			}
+		}
+
 		void __stdcall RenderSettings()
 		{
 			LoadState();
@@ -687,15 +694,24 @@ namespace fv::Remote
 				dirty = true;
 			}
 			Tip("Off: stretch every video to fill its screen. Applies when a video starts (or press Apply below).");
-			dirty |= Checkbox("Projector and cinema screens glow like TVs", &s.selfLit);
+			if (Checkbox("Projector and cinema screens glow like TVs", &s.selfLit)) {
+				dirty = true;
+				ApplyNow();  // switch the screens playing now too
+			}
 			Tip("Same brightness day and night, whichever way the screen faces. Off: lit by the world (dark at night). "
-				"Press Apply below to switch the screens playing now.");
+				"Switches the screens playing now right away.");
 			dirty |= Percent("Projector glow brightness", &s.selfLitBrightness, 4.0f, "100% = the video as is. Applies right away.");
-			dirty |= Checkbox("Glowing screens: draw after the world", &s.selfLitLatePass);
-			Tip("Stops what stands behind a screen (the drive-in's catwalk) from showing through the picture. Press Apply below.");
-			dirty |= Checkbox("Projectors: frame lit by the world (glow map, test)", &s.glowMap);
+			if (Checkbox("Glowing screens: draw after the world", &s.selfLitLatePass)) {
+				dirty = true;
+				ApplyNow();  // switch the screens playing now too
+			}
+			Tip("Stops what stands behind a screen (the drive-in's catwalk) from showing through the picture.");
+			if (Checkbox("Projectors: frame lit by the world (glow map, test)", &s.glowMap)) {
+				dirty = true;
+				ApplyNow();  // switch the screens playing now too
+			}
 			Tip("The screen keeps the game's lighting, so its frame reacts to light like the speakers; only the picture glows. "
-				"Press Apply below. If a projector looks wrong, untick it and Apply.");
+				"Switches the screens playing now right away; untick it if a projector looks wrong.");
 			dirty |= Percent("Projector frame light", &s.frameLight, 4.0f,
 				"Back, frame and pole of a playing projector screen follow the game's light (time of day, weather, indoors). "
 				"Higher = brighter, lower = darker.");
