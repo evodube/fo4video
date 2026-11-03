@@ -441,7 +441,8 @@ namespace fv
 		a_player.stopping = true;  // render thread finishes the teardown
 	}
 
-	bool Manager::Start(RE::TESObjectREFR* a_ref, SourceKind a_kind, const std::wstring& a_file, bool a_loop)
+	bool Manager::Start(RE::TESObjectREFR* a_ref, SourceKind a_kind, const std::wstring& a_file, bool a_loop, std::int64_t a_startAt,
+		bool a_quiet)
 	{
 		if (!a_ref) {
 			Notify("Real Videos: no screen selected");
@@ -461,6 +462,8 @@ namespace fv
 					StopLocked(*p);
 				}
 			}
+			// something new on a screen that was asleep: it doesn't come back with the old video
+			std::erase_if(_sleepers, [&](const Sleeper& a_s) { return a_s.formID == a_ref->GetFormID(); });
 			slot = FreeSlot();
 			if (slot < 0) {
 				Notify("Real Videos: all screen slots are busy (raise iMaxScreens)");
@@ -490,6 +493,7 @@ namespace fv
 		player->kind = a_kind;
 		player->file = a_file;
 		player->loop = a_loop;
+		player->seekDelta = a_startAt;  // carry on from there (woken up after you walked away)
 
 		if (a_kind == SourceKind::kVideo) {
 			if (!std::filesystem::exists(a_file)) {
@@ -553,7 +557,10 @@ namespace fv
 			raw->media->Start();
 		}
 
-		if (a_kind == SourceKind::kVideo) {
+		if (a_quiet) {
+			log::info("{}: back on ({}), carrying on at {:.0f}s", refName, Narrow(std::filesystem::path(a_file).filename().wstring()),
+				static_cast<double>(a_startAt) / 1e7);
+		} else if (a_kind == SourceKind::kVideo) {
 			Notify(std::format("Real Videos: playing {} on {}", Narrow(std::filesystem::path(a_file).filename().wstring()), refName));
 		} else {
 			Notify(std::format("Real Videos: test pattern on {}", refName));
@@ -757,6 +764,40 @@ namespace fv
 				p->brightenable = p->binding.bound && !p->binding.classic;
 			}
 
+			// walked away: turn the screen off after a while (frees its decoder, textures and slot) and remember
+			// where it was, to carry on when you come back
+			if (settings.autoOff && player) {
+				auto*      g = p->binding.bound ? p->binding.geometry.get() : nullptr;
+				const auto where = g ? g->worldBound.center : ref->GetPosition();
+				const float limit = std::max(settings.autoOffDistance, p->binding.bigScreen ? settings.bigMaxDistance : settings.maxDistance);
+				const float ax = where.x - playerPos.x, ay = where.y - playerPos.y, az = where.z - playerPos.z;
+				const auto  now = std::chrono::steady_clock::now();
+				if (std::sqrt(ax * ax + ay * ay + az * az) > limit) {
+					if (!p->away) {
+						p->away = true;
+						p->awaySince = now;
+					} else if (now - p->awaySince >= std::chrono::duration<float>(settings.autoOffSeconds)) {
+						Sleeper s;
+						s.ref = p->ref;
+						s.formID = p->formID;
+						s.kind = p->kind;
+						s.file = p->file;
+						s.loop = p->loop;
+						s.position = p->media ? p->media->Clock() : 0;
+						s.where = where;
+						s.wakeDistance = limit * 0.9f;  // a little closer than where it turned off, so it doesn't flicker on/off
+						s.name = p->name;
+						log::info("{}: you've been away {:.0f}s; turned off until you come back (at {:.0f}s)", p->name, settings.autoOffSeconds,
+							static_cast<double>(s.position) / 1e7);
+						_sleepers.push_back(std::move(s));
+						StopLocked(*p);
+						continue;
+					}
+				} else {
+					p->away = false;
+				}
+			}
+
 			float volume = 0.0f;
 			if (p->binding.bound && player) {
 				// big screens (the drive-in) carry much further, measured from the screen itself
@@ -774,6 +815,31 @@ namespace fv
 				volume = pr.muted ? 0.0f : settings.volume * p->userVolume * screenVolume * gain;
 			}
 			p->volume = volume;
+		}
+
+		// screens that turned off while you were away: back on, where they were, once you're close again
+		if (!buildMode && player) {
+			for (auto it = _sleepers.begin(); it != _sleepers.end();) {
+				auto ref = it->ref.get();
+				if (!ref || ref->IsDeleted() || ref->IsDisabled()) {
+					log::info("{}: gone while it was off; forgetting it", it->name);
+					it = _sleepers.erase(it);
+					continue;
+				}
+				const float dx = it->where.x - playerPos.x, dy = it->where.y - playerPos.y, dz = it->where.z - playerPos.z;
+				if (std::sqrt(dx * dx + dy * dy + dz * dz) < it->wakeDistance && ref->Get3D()) {
+					if (auto* tasks = F4SE::GetTaskInterface()) {
+						tasks->AddTask([this, s = *it]() {
+							if (auto r = s.ref.get()) {
+								Start(r.get(), s.kind, s.file, s.loop, s.position, true);
+							}
+						});
+					}
+					it = _sleepers.erase(it);
+					continue;
+				}
+				++it;
+			}
 		}
 	}
 

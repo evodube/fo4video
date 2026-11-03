@@ -71,6 +71,8 @@ namespace fv
 		std::atomic<bool>  brightenable{ false };  // projector / cinema screen (TVs stay as they are)
 		std::uint64_t      framesShown{ 0 };
 		int                rebindCooldown{ 0 };
+		bool               away{ false };  // further than the auto-off distance
+		std::chrono::steady_clock::time_point awaySince{};
 		std::uint32_t      lastVideoWidth{ 0 };
 		std::uint32_t      lastVideoHeight{ 0 };
 		bool               compositeLogged{ false };
@@ -141,7 +143,23 @@ namespace fv
 		void OnPresent(ID3D11Device* a_device, ID3D11DeviceContext* a_context);
 
 	private:
-		bool Start(RE::TESObjectREFR* a_ref, SourceKind a_kind, const std::wstring& a_file, bool a_loop);
+		bool Start(RE::TESObjectREFR* a_ref, SourceKind a_kind, const std::wstring& a_file, bool a_loop, std::int64_t a_startAt = 0,
+			bool a_quiet = false);
+
+		// a screen turned off because you walked away: what it played and where, to carry on when you come back
+		struct Sleeper
+		{
+			RE::ObjectRefHandle ref;
+			std::uint32_t       formID{ 0 };
+			SourceKind          kind{ SourceKind::kVideo };
+			std::wstring        file;
+			bool                loop{ true };
+			std::int64_t        position{ 0 };  // 100 ns
+			RE::NiPoint3        where{};
+			float               wakeDistance{ 0.0f };
+			std::string         name;
+		};
+		std::vector<Sleeper> _sleepers;
 		int  FreeSlot() const;
 		void StopLocked(Player& a_player);
 		void PollHotkeys();

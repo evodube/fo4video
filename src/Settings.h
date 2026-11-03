@@ -39,6 +39,9 @@ namespace fv
 		// [Audio]
 		bool  enableAudio{ true };
 		float volume{ 1.0f };
+		bool  autoOff{ true };               // screens you've walked away from turn off, and resume when you come back
+		float autoOffDistance{ 3500.0f };    // further than this (game units, ~50 m; never closer than you can hear it)
+		float autoOffSeconds{ 10.0f };       // ... for this long
 		float minDistance{ 150.0f };
 		float maxDistance{ 1500.0f };
 		float falloffCurve{ 2.0f };

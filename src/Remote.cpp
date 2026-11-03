@@ -708,6 +708,14 @@ namespace fv::Remote
 			dirty |= Checkbox("Pause in menus (Esc, Pip-Boy, loading...)", &s.pauseInMenus);
 			dirty |= Checkbox("Pause when the game is in the background (alt-tab)", &s.pauseUnfocused);
 			dirty |= SliderInt("Screens playing at once", &s.maxScreens, 1, 16, "%d");
+			dirty |= Checkbox("Turn screens off when you walk away", &s.autoOff);
+			Tip("Saves memory and frees the screen's place. It remembers the video and where it was, and carries on from there when "
+				"you come back.");
+			if (s.autoOff) {
+				dirty |= Meters("...further away than", &s.autoOffDistance, 300.0f,
+					"Never closer than you can still hear the screen (the sound distances below).");
+				dirty |= SliderFloat("...for longer than", &s.autoOffSeconds, 0.0f, 120.0f, "%.0f s");
+			}
 
 			SeparatorText("Picking a screen");
 			dirty |= Checkbox("Use the screen under the crosshair", &s.aimToSelect);
