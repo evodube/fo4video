@@ -110,6 +110,12 @@ namespace fv::Remote
 			if (Checkbox("Mute", &muted)) {
 				Manager::Get().RemoteSetMuted(a_formID, muted);
 			}
+			if (v.brightenable) {
+				float bright = v.brightness * 100.0f;
+				if (SliderFloat("Brightness", &bright, 25.0f, 400.0f, "%.0f%%")) {
+					Manager::Get().RemoteSetBrightness(a_formID, bright / 100.0f);
+				}
+			}
 
 			if (a_withPicker) {
 				std::scoped_lock lock(g_lock);
@@ -157,7 +163,8 @@ namespace fv::Remote
 			kClose,
 			kLock,
 			kResize,
-			kOpacity
+			kOpacity,
+			kBright
 		};
 
 		bool g_listOpen = false;
@@ -228,6 +235,28 @@ namespace fv::Remote
 		constexpr float kPadX = 562, kPadY = 655, kPadR = 352, kOkR = 133;
 		constexpr float kBarX0 = 83, kBarY0 = 1298, kBarX1 = 1023, kBarY1 = 1453;
 		constexpr float kFadeX = 93, kFadeY = 148, kFadeR = 62;  // opacity, left of the top row
+		constexpr float kSunX = 1032, kSunY = 148, kSunR = 62;   // this screen's brightness, right of the top row
+		constexpr std::array<float, 12> kBrightSteps{ 0.25f, 0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 1.75f, 2.0f, 2.5f, 3.0f, 3.5f, 4.0f };
+
+		// next (+1) or previous (-1) brightness step; going up past 400% wraps round to 25%
+		float BrightStep(float a_now, int a_dir)
+		{
+			std::size_t i = 0;
+			while (i + 1 < kBrightSteps.size() && kBrightSteps[i] < a_now - 0.01f) {
+				++i;
+			}
+			const bool onStep = std::abs(kBrightSteps[i] - a_now) <= 0.01f;
+			if (a_dir > 0) {
+				if (onStep || kBrightSteps[i] < a_now) {
+					return i + 1 < kBrightSteps.size() ? kBrightSteps[i + 1] : kBrightSteps.front();
+				}
+				return kBrightSteps[i];
+			}
+			if (i == 0) {
+				return kBrightSteps.front();
+			}
+			return kBrightSteps[i - 1];
+		}
 
 		Key HitTest(float a_x, float a_y)  // design units
 		{
@@ -260,6 +289,9 @@ namespace fv::Remote
 			}
 			if ((a_x - kFadeX) * (a_x - kFadeX) + (a_y - kFadeY) * (a_y - kFadeY) <= kFadeR * kFadeR) {
 				return Key::kOpacity;
+			}
+			if ((a_x - kSunX) * (a_x - kSunX) + (a_y - kSunY) * (a_y - kSunY) <= kSunR * kSunR) {
+				return Key::kBright;
 			}
 			return Key::kNone;
 		}
@@ -405,6 +437,26 @@ namespace fv::Remote
 				ImDrawListManager::AddText(dl, GetFont(), size, ImVec2{ at.x - ts.x * scale * 0.5f, at.y - ts.y * scale * 0.5f }, kIcon, pct.c_str());
 			}
 
+			// brightness of this screen: a little sun and the percentage (dim on TVs: they stay as they are)
+			{
+				const bool  usable = a_view.brightenable;
+				const ImU32 icon = usable ? kIcon : IM_COL32(90, 90, 90, 255);
+				ImDrawListManager::AddCircleFilled(dl, c.P(kSunX, kSunY), kSunR * c.s, usable ? KeyColor(Key::kBright, a_hover, a_down) : kKey, 40);
+				const float cy = kSunY - 8;
+				ImDrawListManager::AddCircleFilled(dl, c.P(kSunX, cy), 12 * c.s, icon, 24);
+				for (int i = 0; i < 8; ++i) {
+					const float a = 0.7853982f * static_cast<float>(i);
+					Line(c, kSunX + std::cos(a) * 19, cy + std::sin(a) * 19, kSunX + std::cos(a) * 28, cy + std::sin(a) * 28, 5, icon);
+				}
+				const auto  pct = usable ? std::format("{:.0f}%", a_view.brightness * 100.0f) : std::string("--");
+				const float size = 26.0f * c.s;
+				const float scale = size / std::max(1.0f, GetFontSize());
+				ImVec2      ts{};
+				CalcTextSize(&ts, pct.c_str(), nullptr, false, -1.0f);
+				const auto at = c.P(kSunX, kSunY + 38);
+				ImDrawListManager::AddText(dl, GetFont(), size, ImVec2{ at.x - ts.x * scale * 0.5f, at.y - ts.y * scale * 0.5f }, icon, pct.c_str());
+			}
+
 			// small close mark
 			Line(c, kDesignW - 52, 22, kDesignW - 22, 52, 6, a_hover == Key::kClose ? kText : IM_COL32(110, 110, 110, 255));
 			Line(c, kDesignW - 22, 22, kDesignW - 52, 52, 6, a_hover == Key::kClose ? kText : IM_COL32(110, 110, 110, 255));
@@ -451,6 +503,11 @@ namespace fv::Remote
 			case Key::kName:
 				g_listOpen = !g_listOpen;
 				g_scrollToCurrent = g_listOpen;
+				break;
+			case Key::kBright:
+				if (a_view.brightenable) {
+					mgr.RemoteSetBrightness(a_target, BrightStep(a_view.brightness, +1));
+				}
 				break;
 			case Key::kClose:
 				if (g_window) {
@@ -540,6 +597,9 @@ namespace fv::Remote
 					} else {
 						Press(hover, target, view);
 					}
+				}
+				if (hovered && hover == Key::kBright && view.brightenable && IsItemClicked(1)) {
+					Manager::Get().RemoteSetBrightness(target, BrightStep(view.brightness, -1));  // right click: darker
 				}
 				if (g_resizing) {
 					if (IsMouseDown(0)) {
@@ -657,10 +717,12 @@ namespace fv::Remote
 				dirty = true;
 			}
 			Tip("Off: stretch every video to fill its screen. Applies when a video starts (or press Apply below).");
-			dirty |= Checkbox("Projector screens glow like TVs", &s.selfLit);
+			dirty |= Checkbox("Projector and cinema screens glow like TVs", &s.selfLit);
 			Tip("Same brightness day and night, whichever way the screen faces. Off: lit by the world (dark at night). "
 				"Press Apply below to switch the screens playing now.");
-			dirty |= Percent("Projector glow brightness", &s.selfLitBrightness, 4.0f, "100% = the video as is.");
+			dirty |= Percent("Projector glow brightness", &s.selfLitBrightness, 4.0f, "100% = the video as is. Applies right away.");
+			dirty |= Checkbox("Glowing screens: draw after the world", &s.selfLitLatePass);
+			Tip("Stops what stands behind a screen (the drive-in's catwalk) from showing through the picture. Press Apply below.");
 			dirty |= Checkbox("Cinema: stretch to fill the screen", &s.bigScreenStretch);
 			dirty |= Percent("Cinema brightness", &s.bigScreenBrightness, 4.0f, "100% = as is, up to 400%. Only the drive-in screen. Applies right away.");
 			dirty |= Percent("Cinema VHS look", &s.bigScreenVHS, 1.0f, "Soft picture, colour bleed, faded colours, faint scanlines. 0% = off.");

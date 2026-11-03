@@ -67,11 +67,14 @@ namespace fv
 		std::atomic<bool>  stopping{ false };
 		std::atomic<bool>  userPaused{ false };  // paused from the remote
 		std::atomic<std::int64_t> seekDelta{ 0 };  // rewind / fast-forward requested by the remote (100ns)
+		std::atomic<float> brightness{ 1.0f };     // this screen's own brightness from the remote (1 = as is)
+		std::atomic<bool>  brightenable{ false };  // projector / cinema screen (TVs stay as they are)
 		std::uint64_t      framesShown{ 0 };
 		int                rebindCooldown{ 0 };
 		std::uint32_t      lastVideoWidth{ 0 };
 		std::uint32_t      lastVideoHeight{ 0 };
 		bool               compositeLogged{ false };
+		float              lastPictureBrightness{ 1.0f };  // render thread: redraw the composite when it changes
 	};
 
 	// What the remote shows about one screen (copied under the lock; safe on any thread).
@@ -85,6 +88,8 @@ namespace fv
 		std::string   file;
 		float         volume{ 1.0f };
 		bool          muted{ false };
+		float         brightness{ 1.0f };
+		bool          brightenable{ false };
 	};
 
 	class Manager
@@ -103,6 +108,7 @@ namespace fv
 		void RebindAll();                                            // main thread: re-fit every playing screen (after settings changes)
 		void RemoteSetVolume(std::uint32_t a_formID, float a_volume);  // any thread
 		void RemoteSetMuted(std::uint32_t a_formID, bool a_muted);     // any thread
+		void RemoteSetBrightness(std::uint32_t a_formID, float a_brightness);  // any thread; saved per screen
 		RemoteView View(std::uint32_t a_formID);                      // any thread
 		std::vector<RemoteView> Views();                              // any thread: every playing screen
 
@@ -151,7 +157,10 @@ namespace fv
 		{
 			float volume{ -1.0f };  // -1 = fStartVolume
 			bool  muted{ false };
+			float brightness{ 1.0f };
 		};
+		void LoadBrightnessLocked();
+		bool _brightnessLoaded{ false };
 		std::unordered_map<std::uint32_t, Prefs> _prefs;  // remote volume/mute per screen, kept across videos
 		bool                _wasPaused{ false };
 		std::atomic<bool>   _inBuildMode{ false };

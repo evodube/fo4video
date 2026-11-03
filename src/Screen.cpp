@@ -1130,6 +1130,27 @@ namespace fv::Screen
 
 	namespace
 	{
+		// A fresh NiAlphaProperty with blending on but ONE/ZERO (opaque): it only moves the screen into the late
+		// blended pass. Built by hand like the game does (zeroed object + vtable) since no constructor is exposed.
+		RE::NiAlphaProperty* NewOpaqueBlendAlpha()
+		{
+			auto* mem = static_cast<std::byte*>(RE::aligned_alloc(alignof(RE::NiAlphaProperty), sizeof(RE::NiAlphaProperty)));
+			if (!mem) {
+				return nullptr;
+			}
+			std::memset(mem, 0, sizeof(RE::NiAlphaProperty));
+			REL::Relocation<std::uintptr_t> vtbl{ RE::NiAlphaProperty::VTABLE[0] };
+			*reinterpret_cast<std::uintptr_t*>(mem) = vtbl.address();
+			REL::Relocation<std::uint32_t*> objects{ RE::ID::NiRefObject::Objects };
+			::InterlockedIncrement(reinterpret_cast<volatile LONG*>(objects.get()));  // the game's live object count (its dtor lowers it)
+			auto* alpha = reinterpret_cast<RE::NiAlphaProperty*>(mem);
+			// bit 0 blend on, bits 1-4 source = kOne (0), bits 5-8 dest = kZero (1)
+			alpha->flags.flags = static_cast<std::uint16_t>(0x1 | (static_cast<std::uint16_t>(RE::NiAlphaProperty::AlphaFunction::kOne) << 1) |
+															 (static_cast<std::uint16_t>(RE::NiAlphaProperty::AlphaFunction::kZero) << 5));
+			alpha->alphaTestRef = 0;
+			return alpha;
+		}
+
 		// Draw a lit screen with a glowing (effect) shader carrying the video, like a TV, so its brightness doesn't
 		// depend on the time of day or which way it faces. The screen's own property is put back on Unbind.
 		void MakeSelfLit(ScreenBinding& a_binding, RE::BSGeometry* a_geom, RE::BSShaderProperty* a_litProp, RE::BSShaderMaterial* a_litMat,
@@ -1177,9 +1198,25 @@ namespace fv::Screen
 			em->falloffStopOpacity = 1.0f;
 			created->SetFlag(F::kGrayscaleToPaletteColor, false);
 			created->SetFlag(F::kGrayscaleToPaletteAlpha, false);
+			// late pass: an effect shader drawn with the opaque world got painted over by whatever stands behind the
+			// screen (the drive-in's catwalk showed through the top of the picture at night)
+			RE::NiPointer<RE::NiProperty> alpha;
+			if (Settings::Get().selfLitLatePass) {
+				alpha = RE::NiPointer<RE::NiProperty>(NewOpaqueBlendAlpha());
+			}
+			RE::NiPointer<RE::NiProperty> previousAlpha = a_geom->properties[0];
+			if (alpha) {
+				a_geom->properties[0] = alpha;
+			}
 			if (!created->SetupGeometry(a_geom)) {
+				a_geom->properties[0] = previousAlpha;
 				log::warn("'{}': the glowing shader doesn't fit this mesh; staying lit by the world", a_binding.geometryName);
 				return;
+			}
+			if (alpha) {
+				a_binding.alphaSwapped = true;
+				a_binding.originalAlpha = previousAlpha;
+				a_binding.ourAlpha = alpha;
 			}
 			a_binding.originalProp = a_geom->properties[1];
 			a_geom->properties[1] = keep;
@@ -1545,9 +1582,7 @@ namespace fv::Screen
 		}
 
 		a_binding.geometryName = candidates[index].name;
-		// not on the drive-in: the glowing shader drew parts of its huge screen see-through
-		const bool bigScreen = settings.bigScreenRadius > 0.0f && geom->worldBound.fRadius >= settings.bigScreenRadius;
-		if (settings.selfLit && !bigScreen && !a_binding.isEffect && !a_binding.classic && geom->IsTriShape()) {
+		if (settings.selfLit && !a_binding.isEffect && !a_binding.classic && geom->IsTriShape()) {
 			MakeSelfLit(a_binding, geom, prop, mat, a_slotTexture);
 		}
 
@@ -1609,6 +1644,9 @@ namespace fv::Screen
 		}
 		if (a_binding.selfLit && a_binding.geometry && a_binding.geometry->properties[1].get() == a_binding.effectProp.get()) {
 			a_binding.geometry->properties[1] = a_binding.originalProp;  // the screen's own (lit) shader back
+			if (a_binding.alphaSwapped && a_binding.geometry->properties[0].get() == a_binding.ourAlpha.get()) {
+				a_binding.geometry->properties[0] = a_binding.originalAlpha;
+			}
 			if (auto* own = GetShaderProperty(a_binding.geometry.get())) {
 				RebuildRenderPasses(own);
 			}
@@ -1718,6 +1756,15 @@ namespace fv::Screen
 				a_binding.effectMaterial->texCoordScale[i] = a_binding.uvScale;
 			}
 		}
+	}
+
+	void SetGlow(const ScreenBinding& a_binding, float a_scale)
+	{
+		if (!a_binding.bound || !a_binding.selfLit || !a_binding.effectMaterial) {
+			return;
+		}
+		auto* em = static_cast<RE::BSEffectShaderMaterial*>(a_binding.effectMaterial);
+		em->baseColorScale = std::clamp(a_scale, 0.0f, 16.0f);
 	}
 
 	void Dump(RE::TESObjectREFR* a_ref)

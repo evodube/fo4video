@@ -688,6 +688,13 @@ namespace fv
 			}
 
 			Screen::KeepOverlaysHidden(p->binding);
+			{
+				LoadBrightnessLocked();
+				const auto key = PrefKey(*p);
+				const auto it = _prefs.find(key);
+				p->brightness = it != _prefs.end() ? it->second.brightness : 1.0f;
+				p->brightenable = p->binding.bound && !p->binding.classic;
+			}
 
 			float volume = 0.0f;
 			if (p->binding.bound && player) {
@@ -937,6 +944,56 @@ namespace fv
 		_prefs[PrefKeyLocked(a_formID)].muted = a_muted;
 	}
 
+	namespace
+	{
+		constexpr auto kBrightnessIni = "Data\\F4SE\\Plugins\\RealVideos_Screens.ini";
+	}
+
+	void Manager::LoadBrightnessLocked()
+	{
+		if (_brightnessLoaded) {
+			return;
+		}
+		_brightnessLoaded = true;
+		std::vector<char> buf(32 * 1024);
+		const auto        len = ::GetPrivateProfileSectionA("Brightness", buf.data(), static_cast<DWORD>(buf.size()), kBrightnessIni);
+		for (std::size_t i = 0; i < len && buf[i];) {
+			const std::string line(&buf[i]);
+			i += line.size() + 1;
+			const auto eq = line.find('=');
+			if (eq == std::string::npos) {
+				continue;
+			}
+			try {
+				const auto key = static_cast<std::uint32_t>(std::stoul(line.substr(0, eq), nullptr, 16));
+				const float value = std::stof(line.substr(eq + 1));
+				if (key) {
+					_prefs[key].brightness = std::clamp(value, 0.25f, 4.0f);
+				}
+			} catch (...) {
+			}
+		}
+	}
+
+	void Manager::RemoteSetBrightness(std::uint32_t a_formID, float a_brightness)
+	{
+		std::scoped_lock lock(_lock);
+		LoadBrightnessLocked();
+		const auto  key = PrefKeyLocked(a_formID);
+		const float value = std::clamp(a_brightness, 0.25f, 4.0f);
+		_prefs[key].brightness = value;
+		for (auto& p : _players) {
+			if (Is(*p, a_formID)) {
+				p->brightness = value;
+			}
+		}
+		if (key) {
+			const auto name = std::format("{:08X}", key);
+			::WritePrivateProfileStringA("Brightness", name.c_str(), std::abs(value - 1.0f) < 0.001f ? nullptr : std::format("{:.2f}", value).c_str(),
+				kBrightnessIni);
+		}
+	}
+
 	RemoteView Manager::View(std::uint32_t a_formID)
 	{
 		std::scoped_lock lock(_lock);
@@ -948,12 +1005,14 @@ namespace fv
 				v.volume = it->second.volume;
 			}
 			v.muted = it->second.muted;
+			v.brightness = it->second.brightness;
 		}
 		for (auto& p : _players) {
 			if (Is(*p, a_formID) && !p->stopping) {
 				v.name = p->name;
 				v.playing = true;
 				v.paused = p->userPaused;
+				v.brightenable = p->brightenable;
 				v.testPattern = p->kind == SourceKind::kTestPattern;
 				v.file = Narrow(std::filesystem::path(p->file).filename().wstring());
 			}
@@ -1216,6 +1275,19 @@ namespace fv
 				p.lastVideoHeight = vh;
 			}
 
+			// brightness: the screen's own (remote) times the cinema's. Glowing screens take it on their shader (it can
+			// go past white without clipping); the others get it painted into the picture.
+			const float screenBright = p.brightenable ? p.brightness.load() : 1.0f;
+			const bool  glowing = b.bound && b.selfLit;
+			const float baseBright = b.bigScreen ? settings.bigScreenBrightness : 1.0f;
+			if (glowing) {
+				Screen::SetGlow(b, (b.bigScreen ? settings.bigScreenBrightness : settings.selfLitBrightness) * screenBright);
+			}
+			const float pictureBright = glowing ? 1.0f : baseBright * screenBright;
+			const float pictureFx[4]{ pictureBright, 0.0f, static_cast<float>(std::fmod(seconds, 3600.0)), 0.0f };
+			const bool  brightChanged = std::abs(pictureBright - p.lastPictureBrightness) > 0.0001f;
+			p.lastPictureBrightness = pictureBright;
+
 			// 2) shared texture: paint the screen's own texture, then the video only inside the screen face
 			ID3D11ShaderResourceView* want = slot.srv.Get();
 			if (composite) {
@@ -1230,14 +1302,15 @@ namespace fv
 					scale *= 2;
 				}
 				if (slot.srv && slot.EnsureComposite(a_device, bw * scale, bh * scale, srgb)) {
-					if (fresh || slot.compNeedsDraw) {
+					if (fresh || slot.compNeedsDraw || brightChanged) {
 						slot.compNeedsDraw = false;
 						std::array<Compositor::Region, 2> regions{};
 						for (int i = 0; i < b.faceCount && i < 2; ++i) {
 							regions[i] = FaceRegion(b.faceRects[i], slot.compWidth, slot.compHeight, b.faceAspect[i], p.lastVideoWidth, p.lastVideoHeight, b.faceOrient[i]);
 						}
 						Compositor::Get().Compose(a_context, slot.compRTV.Get(), slot.compWidth, slot.compHeight, baseSRV, slot.srv.Get(),
-							std::span<const Compositor::Region>(regions.data(), static_cast<std::size_t>(std::clamp(b.faceCount, 0, 2))));
+							std::span<const Compositor::Region>(regions.data(), static_cast<std::size_t>(std::clamp(b.faceCount, 0, 2))),
+							pictureBright != 1.0f ? pictureFx : nullptr);
 					}
 					want = slot.compSRV.Get();
 					if (!p.compositeLogged) {
@@ -1249,10 +1322,11 @@ namespace fv
 			}
 
 			// 3) big screens (the drive-in): brighter, with the VHS tape look, redrawn every frame (the tape noise moves)
-			const bool filtered = !composite && b.bound && b.bigScreen && (settings.bigScreenBrightness != 1.0f || settings.bigScreenVHS > 0.0f) &&
-			                      Compositor::Get().Ready(a_device);
+			//    and lit projector screens given their own brightness from the remote
+			const float vhs = b.bigScreen ? settings.bigScreenVHS : 0.0f;
+			const bool filtered = !composite && b.bound && !b.classic && (pictureBright != 1.0f || vhs > 0.0f) && Compositor::Get().Ready(a_device);
 			if (filtered && slot.srv && slot.width && slot.height && slot.EnsureComposite(a_device, slot.width, slot.height, srgb)) {
-				const float fx[4]{ settings.bigScreenBrightness, settings.bigScreenVHS, static_cast<float>(std::fmod(seconds, 3600.0)), 0.0f };
+				const float fx[4]{ pictureBright, vhs, static_cast<float>(std::fmod(seconds, 3600.0)), 0.0f };
 				const Compositor::Region whole{ 0.0f, 0.0f, static_cast<float>(slot.compWidth), static_cast<float>(slot.compHeight) };
 				Compositor::Get().Compose(a_context, slot.compRTV.Get(), slot.compWidth, slot.compHeight, nullptr, slot.srv.Get(),
 					std::span<const Compositor::Region>(&whole, 1), fx);

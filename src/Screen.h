@@ -58,6 +58,11 @@ namespace fv
 		RE::NiPointer<RE::NiProperty>       originalProp;   // the screen's own lighting shader property
 		RE::NiPointer<RE::NiProperty>       effectProp;     // ours
 		RE::BSShaderMaterial*               effectMaterial{ nullptr };
+		// while glowing the screen is drawn in the late (blended) pass, after the world, so the scaffolding
+		// behind it can't paint over the picture
+		bool                                alphaSwapped{ false };
+		RE::NiPointer<RE::NiProperty>       originalAlpha;  // whatever alpha property the mesh had (often none)
+		RE::NiPointer<RE::NiProperty>       ourAlpha;
 	};
 
 	namespace Screen
@@ -71,6 +76,9 @@ namespace fv
 		// a_forceIndex >= 0 picks that candidate mesh; otherwise saved choice / INI / heuristics.
 		bool Bind(RE::TESObjectREFR* a_ref, RE::NiTexture* a_slotTexture, ScreenBinding& a_binding, int a_forceIndex = -1);
 		void Unbind(ScreenBinding& a_binding);
+
+		// Glow strength of a self-lit screen (1 = the video as is). Render thread; does nothing on lit screens.
+		void SetGlow(const ScreenBinding& a_binding, float a_scale);
 
 		// False if the bound mesh was detached, its material replaced, or the 3D rebuilt.
 		bool StillValid(const ScreenBinding& a_binding);
