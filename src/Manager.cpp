@@ -632,26 +632,42 @@ namespace fv
 			_inBuildMode = buildMode;
 		}
 
-		// How lit the world is, for the back / frame / pole of glowing projector screens (they glow with the picture,
-		// so they're dimmed to look roughly like the rest of the world: dark at night, near normal by day)
+		// How lit the world is right now, for the back / frame / pole of glowing projector screens: they glow with
+		// the picture, so they're dimmed to what the game's lighting would give them. Outside: the current weather's
+		// ambient + sunlight/moonlight colours (follows the time of day, storms, dusk...). Inside: the cell's own.
 		{
-			float light = 0.5f * (settings.frameDay + settings.frameNight);
+			auto lum = [](float r, float g, float b) { return 0.2126f * r + 0.7152f * g + 0.0722f * b; };
+			auto lumPacked = [&](std::uint32_t c) {
+				return lum(static_cast<float>(c & 0xFF) / 255.0f, static_cast<float>((c >> 8) & 0xFF) / 255.0f, static_cast<float>((c >> 16) & 0xFF) / 255.0f);
+			};
+			float ambient = 0.25f, direct = 0.25f;
 			auto* cell = player ? player->parentCell : nullptr;
-			auto* cal = RE::Calendar::GetSingleton();
-			if (cell && cell->IsExterior() && cal && cal->gameHour) {
-				const float h = cal->gameHour->GetValue();
-				// full day 8-17, full night before 5 and after 20, ramps in between
-				float day = 0.0f;
-				if (h >= 8.0f && h <= 17.0f) {
-					day = 1.0f;
-				} else if (h > 5.0f && h < 8.0f) {
-					day = (h - 5.0f) / 3.0f;
-				} else if (h > 17.0f && h < 20.0f) {
-					day = (20.0f - h) / 3.0f;
+			if (cell && cell->IsInterior()) {
+				if (auto* data = cell->cellData.interior) {
+					ambient = lumPacked(data->ambient);
+					direct = lumPacked(data->directional);
 				}
-				light = settings.frameNight + (settings.frameDay - settings.frameNight) * day;
+			} else if (auto* sky = RE::Sky::GetSingleton()) {
+				const auto& a = sky->skyColor[RE::TESWeather::ColorTypes::kAmbient];
+				const auto& d = sky->skyColor[RE::TESWeather::ColorTypes::kSunlight];
+				ambient = lum(a.r, a.g, a.b);
+				direct = lum(d.r, d.g, d.b);
 			}
-			_frameLight = light;
+			// a surface gets the ambient plus, on average, about half the sun (it isn't always facing it)
+			const float target = std::clamp((ambient + 0.5f * direct) * settings.frameLight, 0.0f, 1.0f);
+			// ease towards it so lightning flashes and weather changes don't make the frame flicker
+			static float smooth = -1.0f;
+			smooth = smooth < 0.0f ? target : smooth + (target - smooth) * 0.05f;
+			_frameLight = smooth;
+			static float logged = -1.0f;
+			static auto  lastLog = std::chrono::steady_clock::time_point{};
+			const auto   now = std::chrono::steady_clock::now();
+			if (std::abs(smooth - logged) > 0.05f && now - lastLog > std::chrono::seconds(10)) {
+				logged = smooth;
+				lastLog = now;
+				log::info("world light {:.2f} (ambient {:.2f}, sun/moon {:.2f}, {}): projector frames at {:.0f}%", smooth, ambient, direct,
+					cell && cell->IsInterior() ? "inside" : "outside", smooth * 100.0f);
+			}
 		}
 
 		for (auto& p : _players) {
