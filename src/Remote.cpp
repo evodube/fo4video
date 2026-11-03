@@ -15,6 +15,10 @@ namespace fv::Remote
 		using namespace ImGuiMCP;
 
 		MENU_WINDOW                g_window{ nullptr };
+		// The menu framework freezes the game (+1 on the UI's pause counter) while a window that takes the mouse is
+		// open. For the remote we take that +1 back, so the world keeps running and you can walk (main thread).
+		std::uint32_t g_menuModeBase = 0;
+		int           g_unfreezeFrames = 0;  // frames left to spot the framework's +1 after opening
 		std::atomic<std::uint32_t> g_target{ 0 };
 
 		std::mutex               g_lock;  // guards the strings below (written on the main thread, read when drawing)
@@ -773,6 +777,14 @@ namespace fv::Remote
 											   static_cast<std::int32_t>(UE::kWheelZoom) | static_cast<std::int32_t>(UE::kJumping) |
 											   static_cast<std::int32_t>(UE::kVATS));
 			if (a_open) {
+				if (g_unfreezeFrames > 0) {
+					--g_unfreezeFrames;
+					if (auto* ui = RE::UI::GetSingleton(); ui && ui->menuMode == g_menuModeBase + 1) {
+						ui->menuMode -= 1;  // the framework's own guard keeps its -1 on close from going below zero
+						g_unfreezeFrames = 0;
+						log::info("remote: game keeps running while the remote is open");
+					}
+				}
 				if (layer && !blocked) {
 					inputs->EnableUserEvent(layer->layerID, flags, false, RE::UserEvents::SENDER_ID::kGameplay);
 					blocked = true;
@@ -838,6 +850,10 @@ namespace fv::Remote
 			g_targetName = Screen::RefName(ref.get());
 		}
 		g_target = ref->GetFormID();
+		if (auto* ui = RE::UI::GetSingleton()) {
+			g_menuModeBase = ui->menuMode;
+			g_unfreezeFrames = 60;
+		}
 		g_window->IsOpen = true;
 	}
 }
