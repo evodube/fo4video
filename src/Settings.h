@@ -4,6 +4,32 @@ namespace fv
 {
 	struct Settings
 	{
+		// old cinema film look, each part 0 (off) .. 1
+		struct Film
+		{
+			float grain{ 0.0f };
+			float scratches{ 0.0f };  // scratches and dust
+			float flicker{ 0.0f };
+			float vignette{ 0.0f };   // dark corners
+			float sepia{ 0.0f };      // faded, warm colours
+			float weave{ 0.0f };      // the frame shaking in the projector gate
+			float softness{ 0.0f };
+
+			[[nodiscard]] bool Any() const { return grain + scratches + flicker + vignette + sepia + weave + softness > 0.001f; }
+			// the shader's layout: grain, scratches, flicker, vignette, sepia, weave, softness, on
+			void Pack(float (&a_out)[8]) const
+			{
+				a_out[0] = grain;
+				a_out[1] = scratches;
+				a_out[2] = flicker;
+				a_out[3] = vignette;
+				a_out[4] = sepia;
+				a_out[5] = weave;
+				a_out[6] = softness;
+				a_out[7] = Any() ? 1.0f : 0.0f;
+			}
+		};
+
 		// [General]
 		bool         enableHotkeys{ true };
 		int          keyPlay{ VK_F9 };
@@ -67,13 +93,16 @@ namespace fv
 		float falloffCurve{ 2.0f };
 		float bigScreenRadius{ 500.0f };   // screens this big (mesh radius) use the big-screen distances
 		bool  bigScreenStretch{ true };    // big screens: stretch the video to fill them (no black bars)
+		bool  projectorStretch{ false };   // projectors: stretch the video to fill the screen (no black bars)
+		Film  cinemaFilm{ 0.25f, 0.25f, 0.2f, 0.35f, 0.3f, 0.15f, 0.2f };
+		Film  projectorFilm{};
 		float bigScreenBrightness{ 1.15f };  // big screens (the drive-in): picture brightness
 		bool  selfLit{ true };               // projector & cinema screens glow like TVs (same brightness day/night, any direction)
 		bool  selfLitLatePass{ true };
 		bool  selfLitFaceOnly{ true };       // only the picture glows (a glowing copy over it); frame keeps normal lighting
 		bool  glowMap{ true };               // projectors: lit screen + glowing picture (glow map) instead of the glowing shader
 		float frameLight{ 1.0f };            // fallback glow (no glow map possible): back/frame/pole follow the world's light
-		float bigScreenVHS{ 0.35f };          // big screens: VHS tape look, 0 = off, 1 = strong
+		float bigScreenVHS{ 0.0f };  // (replaced by the old film look)          // big screens: VHS tape look, 0 = off, 1 = strong
 		float startVolume{ 0.5f };           // volume each screen starts at (the remote's middle button)
 		float bigMinDistance{ 1500.0f };
 		float bigMaxDistance{ 12000.0f };

@@ -121,8 +121,19 @@ namespace fv
 		put(L"Screen", L"iSRGB", i(srgb));
 		put(L"Screen", L"iAspectMode", i(aspectMode));
 		put(L"Screen", L"bStretchOnBigScreens", b(bigScreenStretch));
+		put(L"Screen", L"bStretchOnProjectors", b(projectorStretch));
+		const auto putFilm = [&](const wchar_t* a_section, const Film& a_f) {
+			put(a_section, L"fGrain", f(a_f.grain));
+			put(a_section, L"fScratches", f(a_f.scratches));
+			put(a_section, L"fFlicker", f(a_f.flicker));
+			put(a_section, L"fVignette", f(a_f.vignette));
+			put(a_section, L"fSepia", f(a_f.sepia));
+			put(a_section, L"fWeave", f(a_f.weave));
+			put(a_section, L"fSoftness", f(a_f.softness));
+		};
+		putFilm(L"CinemaFilm", cinemaFilm);
+		putFilm(L"ProjectorFilm", projectorFilm);
 		put(L"Screen", L"fBigScreenBrightness", f(bigScreenBrightness));
-		put(L"Screen", L"fBigScreenVHS", f(bigScreenVHS));
 		put(L"Screen", L"bOnlyInsideScreenArea", b(composite));
 		put(L"Screen", L"bShowOnBothSides", b(bothSides));
 		put(L"Screen", L"bHideOverlays", b(hideOverlays));
@@ -208,12 +219,24 @@ namespace fv
 		falloffCurve = std::clamp(ReadFloat(L"Audio", L"fFalloffCurve", falloffCurve), 0.25f, 8.0f);
 		bigScreenRadius = ReadFloat(L"Audio", L"fBigScreenSize", bigScreenRadius);
 		bigScreenStretch = ReadBool(L"Screen", L"bStretchOnBigScreens", bigScreenStretch);
+		projectorStretch = ReadBool(L"Screen", L"bStretchOnProjectors", projectorStretch);
+		const auto readFilm = [&](const wchar_t* a_section, Film& a_f) {
+			const auto one = [&](const wchar_t* a_key, float& a_v) { a_v = std::clamp(ReadFloat(a_section, a_key, a_v), 0.0f, 1.0f); };
+			one(L"fGrain", a_f.grain);
+			one(L"fScratches", a_f.scratches);
+			one(L"fFlicker", a_f.flicker);
+			one(L"fVignette", a_f.vignette);
+			one(L"fSepia", a_f.sepia);
+			one(L"fWeave", a_f.weave);
+			one(L"fSoftness", a_f.softness);
+		};
+		readFilm(L"CinemaFilm", cinemaFilm);
+		readFilm(L"ProjectorFilm", projectorFilm);
 		selfLit = ReadBool(L"Screen", L"bSelfLitScreens", selfLit);
 		selfLitLatePass = ReadBool(L"Screen", L"bSelfLitLatePass", selfLitLatePass);
 		glowMap = ReadBool(L"Screen", L"bFrameLitByWorld", glowMap);
 		selfLitFaceOnly = ReadBool(L"Screen", L"bGlowPictureOnly", selfLitFaceOnly);
 		bigScreenBrightness = std::clamp(ReadFloat(L"Screen", L"fBigScreenBrightness", bigScreenBrightness), 0.1f, 4.0f);
-		bigScreenVHS = std::clamp(ReadFloat(L"Screen", L"fBigScreenVHS", bigScreenVHS), 0.0f, 1.0f);
 		startVolume = std::clamp(ReadFloat(L"Audio", L"fStartVolume", startVolume), 0.0f, 2.0f);
 		bigMinDistance = ReadFloat(L"Audio", L"fBigScreenMinDistance", bigMinDistance);
 		bigMaxDistance = std::max(ReadFloat(L"Audio", L"fBigScreenMaxDistance", bigMaxDistance), bigMinDistance + 1.0f);

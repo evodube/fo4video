@@ -1853,6 +1853,9 @@ namespace fv::Screen
 			a_binding.screenAspect = 0.0f;
 			a_binding.faceAspect[0] = a_binding.faceAspect[1] = 0.0f;
 			log::info("{}: big screen (size {:.0f}): stretching the video to fill it", RefName(a_ref), geom->worldBound.fRadius);
+		} else if (settings.projectorStretch && !a_binding.classic && !a_binding.bigScreen) {
+			a_binding.screenAspect = 0.0f;  // projector: fill the screen, no black bars
+			a_binding.faceAspect[0] = a_binding.faceAspect[1] = 0.0f;
 		}
 		RebuildRenderPasses(prop);
 		a_binding.geometryName = candidates[index].name;

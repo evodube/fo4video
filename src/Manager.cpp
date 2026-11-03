@@ -1876,6 +1876,13 @@ namespace fv
 			}
 			const float pictureBright = (b.bigScreen ? settings.bigScreenBrightness : 1.0f) * screenBright;
 			const float pictureFx[4]{ pictureBright, 0.0f, static_cast<float>(std::fmod(seconds, 3600.0)), 0.0f };
+			// old film look: the cinema's own, projectors their own, TVs none
+			const Settings::Film* filmSet = b.bound && !b.classic ? (b.bigScreen ? &settings.cinemaFilm : &settings.projectorFilm) : nullptr;
+			float                 film[8]{};
+			const bool            filmOn = filmSet && filmSet->Any();
+			if (filmOn) {
+				filmSet->Pack(film);
+			}
 			// the glowing projector's own texture (back, frame, pole) dimmed to the world's light
 			const float frameScale = glowing && !b.glowOverlay ? _frameLight.load() : 1.0f;
 			const bool  brightChanged = std::abs(pictureBright - p.lastPictureBrightness) > 0.0001f || std::abs(frameScale - p.lastFrameScale) > 0.01f;
@@ -1904,7 +1911,7 @@ namespace fv
 					scale *= 2;
 				}
 				if (slot.srv && slot.EnsureComposite(a_device, bw * scale, bh * scale, srgb)) {
-					if (fresh || slot.compNeedsDraw || brightChanged) {
+					if (fresh || slot.compNeedsDraw || brightChanged || (filmOn && !held && !p.frozen.load())) {
 						slot.compNeedsDraw = false;
 						std::array<Compositor::Region, 2> regions{};
 						for (int i = 0; i < b.faceCount && i < 2; ++i) {
@@ -1919,11 +1926,11 @@ namespace fv
 							auto& glow = _glowSlots[p.slot];
 							if (glow.niTexture && glow.EnsureComposite(a_device, slot.compWidth, slot.compHeight, srgb)) {
 								Compositor::Get().Compose(a_context, glow.compRTV.Get(), glow.compWidth, glow.compHeight, nullptr, slot.srv.Get(), faces,
-									pictureFx);
+									pictureFx, false, 1.0f, filmOn ? film : nullptr);
 							}
 						} else {
 							Compositor::Get().Compose(a_context, slot.compRTV.Get(), slot.compWidth, slot.compHeight, baseSRV, slot.srv.Get(), faces,
-								pictureBright != 1.0f ? pictureFx : nullptr, b.glowOverlay, frameScale);
+								pictureFx, b.glowOverlay, frameScale, filmOn ? film : nullptr);
 						}
 					}
 					if (b.glowMap) {
@@ -1943,15 +1950,14 @@ namespace fv
 
 			// 3) big screens (the drive-in): brighter, with the VHS tape look, redrawn every frame (the tape noise moves)
 			//    and lit projector screens given their own brightness from the remote
-			const float vhs = b.bigScreen ? settings.bigScreenVHS : 0.0f;
-			const bool filtered = !composite && b.bound && !b.classic && (pictureBright != 1.0f || vhs > 0.0f) && Compositor::Get().Ready(a_device);
+			const bool filtered = !composite && b.bound && !b.classic && (pictureBright != 1.0f || filmOn) && Compositor::Get().Ready(a_device);
 			if (filtered && p.frozen.load() && slot.compSRV) {
 				want = slot.compSRV.Get();  // frozen: keep the last filtered picture, nothing redrawn
 			} else if (filtered && slot.srv && slot.width && slot.height && slot.EnsureComposite(a_device, slot.width, slot.height, srgb)) {
-				const float fx[4]{ pictureBright, vhs, static_cast<float>(std::fmod(seconds, 3600.0)), 0.0f };
+				const float fx[4]{ pictureBright, 0.0f, static_cast<float>(std::fmod(seconds, 3600.0)), 0.0f };
 				const Compositor::Region whole{ 0.0f, 0.0f, static_cast<float>(slot.compWidth), static_cast<float>(slot.compHeight) };
 				Compositor::Get().Compose(a_context, slot.compRTV.Get(), slot.compWidth, slot.compHeight, nullptr, slot.srv.Get(),
-					std::span<const Compositor::Region>(&whole, 1), fx);
+					std::span<const Compositor::Region>(&whole, 1), fx, false, 1.0f, filmOn ? film : nullptr);
 				want = slot.compSRV.Get();
 			}
 

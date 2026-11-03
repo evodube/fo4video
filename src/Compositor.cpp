@@ -13,6 +13,8 @@ cbuffer Params : register(b0)
 	float4 mapU;   // ou, au, bu, -
 	float4 mapV;   // ov, av, bv, -
 	float4 fx;     // brightness, VHS strength (0 = off), time in seconds, 1 = write alpha 0
+	float4 film;   // old film: grain, scratches & dust, flicker, vignette (0..1)
+	float4 film2;  // old film: sepia, gate weave, softness, 1 = on
 };
 Texture2D    tex : register(t0);
 SamplerState smp : register(s0);
@@ -53,9 +55,52 @@ float3 VHS(float2 uv, float s, float t)
 	return saturate(c);
 }
 
+float Hash(float2 p)
+{
+	return frac(sin(dot(p, float2(12.9898, 78.233))) * 43758.5453);
+}
+
+// Old cinema film, every part on its own slider: the frame shakes a little in the projector gate, the picture is
+// a touch soft, colours fade towards sepia, the light flickers, grain crawls, scratches and dust come and go,
+// and the corners darken. Changes 24 times a second like real film.
+float3 OldFilm(float2 uv, float t)
+{
+	const float frame = floor(t * 24.0);
+	uv += (float2(Hash(float2(frame, 1.3)), Hash(float2(frame, 7.1))) - 0.5) * film2.y * float2(0.004, 0.008);
+
+	float3 c = tex.Sample(smp, uv).rgb;
+	const float s = film2.z * 0.0025;
+	if (s > 0.0) {
+		c = (c * 2.0 + tex.Sample(smp, uv + float2(s, 0)).rgb + tex.Sample(smp, uv - float2(s, 0)).rgb +
+			 tex.Sample(smp, uv + float2(0, s)).rgb + tex.Sample(smp, uv - float2(0, s)).rgb) / 6.0;
+	}
+
+	const float l = dot(c, float3(0.299, 0.587, 0.114));
+	c = lerp(c, float3(l * 1.08 + 0.03, l * 0.96 + 0.02, l * 0.78 + 0.01), film2.x);
+
+	c *= 1.0 + (Hash(float2(frame, 3.7)) - 0.5) * 0.22 * film.z;
+
+	c += (Hash(uv * float2(1531.0, 977.0) + frame * 13.17) - 0.5) * 0.22 * film.x;
+
+	[unroll] for (int k = 0; k < 3; ++k) {
+		if (Hash(float2(frame * 0.37, k * 11.0 + 2.0)) < 0.35 * film.y) {
+			const float x = Hash(float2(floor(frame / 6.0), k * 5.3 + 1.0));
+			const float line = 1.0 - smoothstep(0.0, 0.0012, abs(uv.x - x));
+			c = lerp(c, float3(0.82, 0.80, 0.74), line * 0.55);
+		}
+	}
+	if (Hash(floor(uv * float2(240.0, 135.0)) + frame * 7.31) > 1.0 - 0.0025 * film.y) {
+		c *= 0.25;  // a speck of dust
+	}
+
+	const float2 v = uv * 2.0 - 1.0;
+	c *= 1.0 - film.w * 0.65 * smoothstep(0.35, 1.5, dot(v, v));
+	return saturate(c);
+}
+
 float4 PSMain(VSOut i) : SV_Target
 {
-	float3 c = fx.y > 0.0 ? VHS(i.uv, fx.y, fx.z) : tex.Sample(smp, i.uv).rgb;
+	float3 c = film2.w > 0.5 ? OldFilm(i.uv, fx.z) : fx.y > 0.0 ? VHS(i.uv, fx.y, fx.z) : tex.Sample(smp, i.uv).rgb;
 	return float4(saturate(c * fx.x), fx.w > 0.5 ? 0.0 : 1.0);
 }
 )";
@@ -66,6 +111,7 @@ float4 PSMain(VSOut i) : SV_Target
 			float mapU[4];
 			float mapV[4];
 			float fx[4];
+			float film[8];
 		};
 
 		// Everything Compose() changes, captured and put back afterwards (the game caches its D3D state).
@@ -269,7 +315,7 @@ float4 PSMain(VSOut i) : SV_Target
 	}
 
 	void Compositor::Draw(ID3D11DeviceContext* a_context, std::uint32_t a_width, std::uint32_t a_height, const Region& a_region,
-		ID3D11ShaderResourceView* a_srv, ID3D11SamplerState* a_sampler, const float* a_fx)
+		ID3D11ShaderResourceView* a_srv, ID3D11SamplerState* a_sampler, const float* a_fx, const float* a_film)
 	{
 		D3D11_MAPPED_SUBRESOURCE mapped{};
 		if (FAILED(a_context->Map(_cb.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
@@ -293,6 +339,9 @@ float4 PSMain(VSOut i) : SV_Target
 		p->fx[1] = a_fx ? a_fx[1] : 0.0f;
 		p->fx[2] = a_fx ? a_fx[2] : 0.0f;
 		p->fx[3] = a_fx ? a_fx[3] : 0.0f;
+		for (int i = 0; i < 8; ++i) {
+			p->film[i] = a_film ? a_film[i] : 0.0f;
+		}
 		a_context->Unmap(_cb.Get(), 0);
 
 		a_context->PSSetShaderResources(0, 1, &a_srv);
@@ -302,7 +351,7 @@ float4 PSMain(VSOut i) : SV_Target
 
 	void Compositor::Compose(ID3D11DeviceContext* a_context, ID3D11RenderTargetView* a_target, std::uint32_t a_width, std::uint32_t a_height,
 		ID3D11ShaderResourceView* a_base, ID3D11ShaderResourceView* a_video, std::span<const Region> a_regions, const float* a_fx,
-		bool a_baseSeeThrough, float a_baseScale)
+		bool a_baseSeeThrough, float a_baseScale, const float* a_film)
 	{
 		if (!_ok || !a_target || !a_video) {
 			return;
@@ -337,7 +386,8 @@ float4 PSMain(VSOut i) : SV_Target
 
 		const float baseFx[4]{ a_baseScale, 0.0f, 0.0f, a_baseSeeThrough ? 1.0f : 0.0f };
 		if (a_base) {
-			Draw(a_context, a_width, a_height, Region{ 0, 0, static_cast<float>(a_width), static_cast<float>(a_height) }, a_base, _clamp.Get(), baseFx);
+			Draw(a_context, a_width, a_height, Region{ 0, 0, static_cast<float>(a_width), static_cast<float>(a_height) }, a_base, _clamp.Get(), baseFx,
+				nullptr);
 		} else {
 			const float black[4]{ 0, 0, 0, a_baseSeeThrough ? 0.0f : 1.0f };
 			a_context->ClearRenderTargetView(a_target, black);
@@ -349,7 +399,7 @@ float4 PSMain(VSOut i) : SV_Target
 			videoFx[2] = a_fx[2];
 		}
 		for (const auto& region : a_regions) {
-			Draw(a_context, a_width, a_height, region, a_video, _border.Get(), videoFx);
+			Draw(a_context, a_width, a_height, region, a_video, _border.Get(), videoFx, a_film);
 		}
 
 		ID3D11ShaderResourceView* nullSRV = nullptr;

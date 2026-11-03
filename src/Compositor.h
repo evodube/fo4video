@@ -25,12 +25,13 @@ namespace fv
 			ID3D11ShaderResourceView* a_base, ID3D11ShaderResourceView* a_video, std::span<const Region> a_regions,
 			const float* a_fx = nullptr,  // a_fx: brightness, VHS strength, time (seconds) for the video regions
 			bool a_baseSeeThrough = false,  // alpha 0 outside the video regions (face-only glow)
-			float a_baseScale = 1.0f);      // brightness of everything outside the video regions
+			float a_baseScale = 1.0f,       // brightness of everything outside the video regions
+			const float* a_film = nullptr); // old film look for the video regions: 8 values, see Settings::Film
 
 	private:
 		bool Init(ID3D11Device* a_device);
 		void Draw(ID3D11DeviceContext* a_context, std::uint32_t a_width, std::uint32_t a_height, const Region& a_region,
-			ID3D11ShaderResourceView* a_srv, ID3D11SamplerState* a_sampler, const float* a_fx);
+			ID3D11ShaderResourceView* a_srv, ID3D11SamplerState* a_sampler, const float* a_fx, const float* a_film);
 
 		ComPtr<ID3D11VertexShader>      _vs;
 		ComPtr<ID3D11PixelShader>       _ps;

@@ -1064,12 +1064,32 @@ namespace fv::Remote
 				"picture glows. Off: the whole screen glows.");
 			dirty |= Checkbox("Cinema: stretch to fill the screen", &s.bigScreenStretch);
 			dirty |= Percent("Cinema brightness", &s.bigScreenBrightness, 4.0f, "100% = as is, up to 400%. Only the drive-in screen. Applies right away.");
-			dirty |= Percent("Cinema VHS look", &s.bigScreenVHS, 1.0f, "Soft picture, colour bleed, faded colours, faint scanlines. 0% = off.");
+			dirty |= Checkbox("Projectors: stretch to fill the screen", &s.projectorStretch);
+			Tip("Off: the video keeps its shape with black bars. Applies when a video starts (or press Apply below).");
 			dirty |= Checkbox("Projectors: draw the video only inside the screen", &s.composite);
 			Tip("Off: the video covers the whole mesh, frame included.");
 			dirty |= Checkbox("Two-sided screens: show on both sides", &s.bothSides);
 			dirty |= Checkbox("Stop the screen's own animation while playing", &s.stopScreenAnimation);
 			dirty |= Checkbox("Hide glowing layers over the screen", &s.hideOverlays);
+			// old cinema film look, every part on its own slider; the cinema and projectors each have their own set
+			const auto filmSliders = [&](const char* a_id, Settings::Film& a_f) {
+				PushID(a_id);
+				dirty |= Percent("Grain", &a_f.grain, 1.0f, "Fine film grain that crawls over the picture.");
+				dirty |= Percent("Scratches and dust", &a_f.scratches, 1.0f, "Thin vertical scratches and specks of dust that come and go.");
+				dirty |= Percent("Flicker", &a_f.flicker, 1.0f, "The brightness flickering slightly, like an old projector lamp.");
+				dirty |= Percent("Dark corners", &a_f.vignette, 1.0f, "The corners and edges of the picture darker than the middle.");
+				dirty |= Percent("Faded colours (sepia)", &a_f.sepia, 1.0f, "Colours fading towards warm brown, like old film stock.");
+				dirty |= Percent("Shake", &a_f.weave, 1.0f, "The picture moving very slightly, like film running through an old projector.");
+				dirty |= Percent("Softness", &a_f.softness, 1.0f, "A slightly soft, out-of-focus picture.");
+				PopID();
+			};
+			SeparatorText("Cinema: old film look");
+			filmSliders("cinemafilm", s.cinemaFilm);
+			SeparatorText("Projectors: old film look");
+			filmSliders("projectorfilm", s.projectorFilm);
+			TextDisabled("All at 0% = no film look. TVs never get it. Changes show right away.");
+			Separator();
+
 			Text("Colours");
 			SameLine();
 			dirty |= RadioButton("Auto", &s.srgb, -1);
