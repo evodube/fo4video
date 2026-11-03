@@ -151,7 +151,8 @@ namespace fv::Remote
 			kSearch,
 			kName,
 			kClose,
-			kLock
+			kLock,
+			kBacklight
 		};
 
 		bool g_listOpen = false;
@@ -213,6 +214,7 @@ namespace fv::Remote
 		} };
 		constexpr float kPadX = 562, kPadY = 655, kPadR = 352, kOkR = 133;
 		constexpr float kBarX0 = 83, kBarY0 = 1298, kBarX1 = 1023, kBarY1 = 1453;
+		constexpr float kLightX = 1032, kLightY = 148, kLightR = 62;  // backlight, right of the top row
 
 		Key HitTest(float a_x, float a_y)  // design units
 		{
@@ -239,6 +241,9 @@ namespace fv::Remote
 			}
 			if (a_x <= 90 && a_y <= 90) {
 				return Key::kLock;
+			}
+			if ((a_x - kLightX) * (a_x - kLightX) + (a_y - kLightY) * (a_y - kLightY) <= kLightR * kLightR) {
+				return Key::kBacklight;
 			}
 			return Key::kNone;
 		}
@@ -360,6 +365,25 @@ namespace fv::Remote
 				Line(c, sx + 13, sy, sx + 13, 46.0f, 6, col);
 			}
 
+			// backlight: a small sun, its rays lit by level, three dots underneath
+			{
+				const bool  usable = a_view.canBacklight;
+				const ImU32 bg = !usable ? IM_COL32(35, 35, 37, 255) : KeyColor(Key::kBacklight, a_hover, a_down);
+				ImDrawListManager::AddCircleFilled(dl, c.P(kLightX, kLightY), kLightR * c.s, bg, 40);
+				const ImU32 lit = !usable ? IM_COL32(80, 80, 80, 255) : a_view.backlight > 0 ? IM_COL32(255, 205, 90, 255) : kIcon;
+				ImDrawListManager::AddCircleFilled(dl, c.P(kLightX, kLightY - 8), 13 * c.s, lit, 24);
+				for (int i = 0; i < 8; ++i) {
+					const float a = i * 0.7853982f;
+					const float ca = std::cos(a), sa = std::sin(a);
+					Line(c, kLightX + ca * 21, kLightY - 8 + sa * 21, kLightX + ca * 31, kLightY - 8 + sa * 31, 5, lit);
+				}
+				for (int i = 0; i < 3; ++i) {
+					const bool on = usable && a_view.backlight > i;
+					ImDrawListManager::AddCircleFilled(dl, c.P(kLightX - 16 + i * 16.0f, kLightY + 36), 5 * c.s,
+						on ? IM_COL32(255, 205, 90, 255) : IM_COL32(90, 90, 90, 255), 12);
+				}
+			}
+
 			// small close mark
 			Line(c, kDesignW - 52, 22, kDesignW - 22, 52, 6, a_hover == Key::kClose ? kText : IM_COL32(110, 110, 110, 255));
 			Line(c, kDesignW - 22, 22, kDesignW - 52, 52, 6, a_hover == Key::kClose ? kText : IM_COL32(110, 110, 110, 255));
@@ -415,6 +439,11 @@ namespace fv::Remote
 			case Key::kLock:
 				g_locked = !g_locked;
 				SaveState();
+				break;
+			case Key::kBacklight:
+				if (a_view.canBacklight) {
+					mgr.RemoteCycleBacklight(a_target);
+				}
 				break;
 			default:
 				break;

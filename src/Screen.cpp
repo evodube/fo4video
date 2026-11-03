@@ -1532,6 +1532,53 @@ namespace fv::Screen
 		return true;
 	}
 
+	namespace
+	{
+		// Emit colours handed to the renderer; never freed, so a pointer the game still holds stays valid.
+		RE::NiColor* WhiteEmit()
+		{
+			static std::list<RE::NiColor> pool;
+			return &pool.emplace_back(1.0f, 1.0f, 1.0f);
+		}
+	}
+
+	bool CanBacklight(const ScreenBinding& a_binding)
+	{
+		return a_binding.bound && !a_binding.isEffect && !a_binding.classic &&
+		       netimmerse_cast<RE::BSLightingShaderProperty*>(GetShaderProperty(a_binding.geometry.get())) != nullptr;
+	}
+
+	void SetBacklight(ScreenBinding& a_binding, int a_level)
+	{
+		a_level = std::clamp(a_level, 0, 3);
+		if (!CanBacklight(a_binding) || a_level == a_binding.backlightLevel) {
+			return;
+		}
+		auto* prop = netimmerse_cast<RE::BSLightingShaderProperty*>(GetShaderProperty(a_binding.geometry.get()));
+		using F = RE::BSShaderProperty::EShaderPropertyFlag;
+		if (!a_binding.backlightSaved) {
+			a_binding.backlightSaved = true;
+			a_binding.originalEmitColor = prop->emitColor;
+			a_binding.originalEmitScale = prop->emitColorScale;
+			a_binding.originalOwnEmit = prop->flags.all(F::kOwnEmit);
+		}
+		if (a_level > 0) {
+			// the shader adds the emit colour to the light falling on the screen, so the picture shows at
+			// this brightness even in the dark
+			static constexpr std::array<float, 4> kScale{ 0.0f, 0.45f, 0.8f, 1.25f };
+			prop->emitColor = WhiteEmit();
+			prop->emitColorScale = kScale[static_cast<std::size_t>(a_level)];
+			prop->SetFlag(F::kOwnEmit, true);
+		} else {
+			prop->emitColor = a_binding.originalEmitColor;
+			prop->emitColorScale = a_binding.originalEmitScale;
+			prop->SetFlag(F::kOwnEmit, a_binding.originalOwnEmit);
+		}
+		RebuildRenderPasses(prop);
+		a_binding.backlightLevel = a_level;
+		log::info("'{}': backlight {}", a_binding.geometryName, a_level == 0 ? std::string("off") : std::format("level {}", a_level));
+	}
+
 	void Unbind(ScreenBinding& a_binding)
 	{
 		if (!a_binding.bound) {
@@ -1562,6 +1609,13 @@ namespace fv::Screen
 				prop->controllers = a_binding.savedControllers;
 			}
 			RebuildRenderPasses(prop);
+			if (a_binding.backlightSaved) {
+				if (auto* lp = netimmerse_cast<RE::BSLightingShaderProperty*>(prop)) {
+					lp->emitColor = a_binding.originalEmitColor;
+					lp->emitColorScale = a_binding.originalEmitScale;
+					lp->SetFlag(RE::BSShaderProperty::EShaderPropertyFlag::kOwnEmit, a_binding.originalOwnEmit);
+				}
+			}
 			if (a_binding.twoSidedCleared) {
 				prop->SetFlag(RE::BSShaderProperty::EShaderPropertyFlag::kTwoSided, true);
 			}

@@ -53,6 +53,12 @@ namespace fv
 		bool                                classic{ false };       // TV screen: whole texture, untouched UVs (like 0.1)
 		bool                                twoSidedCleared{ false };  // we stopped drawing the back of the sheet
 		bool                                bigScreen{ false };        // the drive-in: own brightness / VHS look
+		// backlight (lit screens only): the video glows on its own so it isn't dark at night
+		int                                 backlightLevel{ 0 };
+		bool                                backlightSaved{ false };
+		RE::NiColor*                        originalEmitColor{ nullptr };
+		float                               originalEmitScale{ 0.0f };
+		bool                                originalOwnEmit{ false };
 	};
 
 	namespace Screen
@@ -72,6 +78,10 @@ namespace fv
 
 		// Main thread: re-hide overlay layers that the object's own animation turned back on.
 		void KeepOverlaysHidden(ScreenBinding& a_binding);
+
+		// Main thread: 0 = off, 1..3 = low/medium/high glow. Lit (lighting shader) screens only; TVs already glow.
+		void SetBacklight(ScreenBinding& a_binding, int a_level);
+		bool CanBacklight(const ScreenBinding& a_binding);
 
 		// Render thread: re-apply our UV mapping (cheap; undoes any UV animation from other mods).
 		void ReapplyUV(const ScreenBinding& a_binding);

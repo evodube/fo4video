@@ -18,6 +18,7 @@
 #include <cstring>
 #include <cwctype>
 #include <deque>
+#include <list>
 #include <filesystem>
 #include <format>
 #include <functional>

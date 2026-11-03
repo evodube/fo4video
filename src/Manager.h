@@ -65,6 +65,7 @@ namespace fv
 		float              userVolume{ 1.0f };
 		std::atomic<bool>  stopping{ false };
 		std::atomic<bool>  userPaused{ false };  // paused from the remote
+		std::atomic<bool>  canBacklight{ false };
 		std::atomic<std::int64_t> seekDelta{ 0 };  // rewind / fast-forward requested by the remote (100ns)
 		std::uint64_t      framesShown{ 0 };
 		int                rebindCooldown{ 0 };
@@ -84,6 +85,8 @@ namespace fv
 		std::string   file;
 		float         volume{ 1.0f };
 		bool          muted{ false };
+		int           backlight{ 0 };          // 0 off, 1..3
+		bool          canBacklight{ false };   // lit screen (projectors, cinema); TVs glow by themselves
 	};
 
 	class Manager
@@ -99,6 +102,7 @@ namespace fv
 		void RemoteFirst(RE::TESObjectREFR* a_ref);                  // home: first video of the folder
 		void RemotePower(RE::TESObjectREFR* a_ref);                  // off if playing, else on
 		void RemoteSeek(std::uint32_t a_formID, float a_seconds);    // any thread
+		void RemoteCycleBacklight(std::uint32_t a_formID);          // any thread: off -> low -> medium -> high
 		void RemoteSetVolume(std::uint32_t a_formID, float a_volume);  // any thread
 		void RemoteSetMuted(std::uint32_t a_formID, bool a_muted);     // any thread
 		RemoteView View(std::uint32_t a_formID);                      // any thread
@@ -148,6 +152,7 @@ namespace fv
 		{
 			float volume{ -1.0f };  // -1 = fStartVolume
 			bool  muted{ false };
+			int   backlight{ 0 };
 		};
 		std::unordered_map<std::uint32_t, Prefs> _prefs;  // remote volume/mute per screen, kept across videos
 		bool                _wasPaused{ false };
