@@ -76,6 +76,7 @@ namespace fv
 		int                rebindCooldown{ 0 };
 		RE::ObjectRefHandle workshop;      // the settlement (workbench) the screen is in, if any
 		bool               workshopChecked{ false };
+		bool               cinema{ false };  // the drive-in (remembered while its 3D is unloaded far away)
 		bool               elsewhere{ false };  // you're in a different settlement
 		std::chrono::steady_clock::time_point elsewhereSince{};
 		bool               away{ false };  // further than the auto-off distance
@@ -193,6 +194,7 @@ namespace fv
 			std::string         name;
 			RE::ObjectRefHandle workshop;  // its settlement: back on when you're in it again
 			bool                paused{ false };  // paused with the remote when it went off / was saved
+			bool                cinema{ false };  // uses the cinema's turn-off settings
 		};
 		RE::ObjectRefHandle _playerWorkshop;  // the settlement you're standing in (none = outside any)
 		bool                _playerWorkshopKnown{ false };
@@ -206,8 +208,9 @@ namespace fv
 
 		std::mutex                           _lock;
 		std::vector<std::unique_ptr<Player>> _players;
-		std::array<Slot, 16>                 _slots;
-		std::array<Slot, 16>                 _glowSlots;  // glow-map textures (Textures\RealVideos\slot16-31.dds)
+		static constexpr int                 kMaxSlots = 20;
+		std::array<Slot, kMaxSlots>          _slots;
+		std::array<Slot, kMaxSlots>          _glowSlots;  // glow-map textures (Textures\RealVideos\slot20-39.dds)
 
 		std::atomic<bool> _maintainPending{ false };
 		std::uint64_t     _frame{ 0 };

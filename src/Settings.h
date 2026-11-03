@@ -39,7 +39,7 @@ namespace fv
 		// [Audio]
 		bool  enableAudio{ true };
 		float volume{ 1.0f };
-		bool  offInOtherSettlement{ true };  // screens turn off while you're in a different settlement
+		bool  offInOtherSettlement{ false };  // (removed from the settings; kept off)
 		float otherSettlementSeconds{ 5.0f };
 		bool  autoOff{ true };               // screens you've walked away from turn off, and resume when you come back
 		float autoOffDistance{ 7000.0f };    // further than this (game units, ~100 m; never closer than you can hear it)
@@ -51,6 +51,13 @@ namespace fv
 		bool  freeze{ true };                // picture stops updating when far or out of view (sound carries on)
 		float freezeDistance{ 3500.0f };     // ~50 m
 		float freezeSeconds{ 10.0f };
+		// the cinema has its own pause / turn-off distances (it's seen and heard from much further away)
+		bool  cinemaFreeze{ true };
+		float cinemaFreezeDistance{ 10500.0f };     // ~150 m
+		float cinemaFreezeSeconds{ 10.0f };
+		bool  cinemaAutoOff{ true };
+		float cinemaAutoOffDistance{ 21000.0f };    // ~300 m
+		float cinemaAutoOffSeconds{ 30.0f };
 		int   maxHeightTV{ 720 };            // decode videos no taller than this (0 = full size)
 		int   maxHeightProjector{ 1080 };
 		int   maxHeightCinema{ 1080 };

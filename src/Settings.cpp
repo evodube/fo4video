@@ -95,8 +95,6 @@ namespace fv
 		put(L"General", L"bPauseWhenAltTabbed", b(pauseUnfocused));
 		put(L"General", L"iMaxScreens", i(maxScreens));
 		put(L"General", L"bAutoOff", b(autoOff));
-		put(L"General", L"bOffInOtherSettlement", b(offInOtherSettlement));
-		put(L"General", L"fOtherSettlementSeconds", f(otherSettlementSeconds));
 		put(L"General", L"fAutoOffDistance", f(autoOffDistance));
 		put(L"General", L"fAutoOffSeconds", f(autoOffSeconds));
 		put(L"General", L"bFreezePicture", b(freeze));
@@ -106,6 +104,12 @@ namespace fv
 		put(L"General", L"fAllScreensRadius", f(allRadius));
 		put(L"General", L"fFreezeDistance", f(freezeDistance));
 		put(L"General", L"fFreezeSeconds", f(freezeSeconds));
+		put(L"Cinema", L"bPause", b(cinemaFreeze));
+		put(L"Cinema", L"fPauseDistance", f(cinemaFreezeDistance));
+		put(L"Cinema", L"fPauseSeconds", f(cinemaFreezeSeconds));
+		put(L"Cinema", L"bTurnOff", b(cinemaAutoOff));
+		put(L"Cinema", L"fTurnOffDistance", f(cinemaAutoOffDistance));
+		put(L"Cinema", L"fTurnOffSeconds", f(cinemaAutoOffSeconds));
 		put(L"General", L"iMaxHeightTV", i(maxHeightTV));
 		put(L"General", L"iMaxHeightProjector", i(maxHeightProjector));
 		put(L"General", L"iMaxHeightCinema", i(maxHeightCinema));
@@ -156,10 +160,8 @@ namespace fv
 		loop = ReadBool(L"General", L"bLoop", loop);
 		pauseInMenus = ReadBool(L"General", L"bPauseInMenus", pauseInMenus);
 		pauseUnfocused = ReadBool(L"General", L"bPauseWhenAltTabbed", pauseUnfocused);
-		maxScreens = std::clamp(ReadInt(L"General", L"iMaxScreens", maxScreens), 1, 16);
+		maxScreens = std::clamp(ReadInt(L"General", L"iMaxScreens", maxScreens), 1, 20);
 		autoOff = ReadBool(L"General", L"bAutoOff", autoOff);
-		offInOtherSettlement = ReadBool(L"General", L"bOffInOtherSettlement", offInOtherSettlement);
-		otherSettlementSeconds = std::clamp(ReadFloat(L"General", L"fOtherSettlementSeconds", otherSettlementSeconds), 0.0f, 600.0f);
 		autoOffDistance = std::max(0.0f, ReadFloat(L"General", L"fAutoOffDistance", autoOffDistance));
 		autoOffSeconds = std::clamp(ReadFloat(L"General", L"fAutoOffSeconds", autoOffSeconds), 0.0f, 3600.0f);
 		freeze = ReadBool(L"General", L"bFreezePicture", freeze);
@@ -169,6 +171,12 @@ namespace fv
 		allRadius = std::max(0.0f, ReadFloat(L"General", L"fAllScreensRadius", allRadius));
 		freezeDistance = std::max(0.0f, ReadFloat(L"General", L"fFreezeDistance", freezeDistance));
 		freezeSeconds = std::clamp(ReadFloat(L"General", L"fFreezeSeconds", freezeSeconds), 0.0f, 3600.0f);
+		cinemaFreeze = ReadBool(L"Cinema", L"bPause", cinemaFreeze);
+		cinemaFreezeDistance = std::max(0.0f, ReadFloat(L"Cinema", L"fPauseDistance", cinemaFreezeDistance));
+		cinemaFreezeSeconds = std::clamp(ReadFloat(L"Cinema", L"fPauseSeconds", cinemaFreezeSeconds), 0.0f, 3600.0f);
+		cinemaAutoOff = ReadBool(L"Cinema", L"bTurnOff", cinemaAutoOff);
+		cinemaAutoOffDistance = std::max(0.0f, ReadFloat(L"Cinema", L"fTurnOffDistance", cinemaAutoOffDistance));
+		cinemaAutoOffSeconds = std::clamp(ReadFloat(L"Cinema", L"fTurnOffSeconds", cinemaAutoOffSeconds), 0.0f, 3600.0f);
 		maxHeightTV = std::max(0, ReadInt(L"General", L"iMaxHeightTV", maxHeightTV));
 		maxHeightProjector = std::max(0, ReadInt(L"General", L"iMaxHeightProjector", maxHeightProjector));
 		maxHeightCinema = std::max(0, ReadInt(L"General", L"iMaxHeightCinema", maxHeightCinema));

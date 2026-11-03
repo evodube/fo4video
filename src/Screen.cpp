@@ -856,7 +856,7 @@ namespace fv::Screen
 			return LoadViaTextureSet(a_path);
 		}
 
-		std::array<RE::NiPointer<RE::NiTexture>, 32> g_slotTextures;  // 0-15 pictures, 16-31 glow maps
+		std::array<RE::NiPointer<RE::NiTexture>, 40> g_slotTextures;  // 0-19 pictures, 20-39 glow maps
 
 		std::string ModelKey(RE::TESObjectREFR* a_ref)
 		{

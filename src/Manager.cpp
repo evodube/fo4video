@@ -555,7 +555,7 @@ namespace fv
 		};
 
 		auto slotTexture = Screen::LoadSlotTexture(slot);
-		auto glowTexture = Screen::LoadSlotTexture(slot + 16);  // glow map (optional; missing = glowing shader)
+		auto glowTexture = Screen::LoadSlotTexture(slot + kMaxSlots);  // glow map (optional; missing = glowing shader)
 		if (!slotTexture) {
 			Notify("Real Videos: placeholder textures missing (Data\\Textures\\RealVideos)");
 			releaseSlot();
@@ -886,7 +886,17 @@ namespace fv
 
 			// far away or out of view for a while: stop updating the picture (the sound carries on). Comes back
 			// the moment you look at it or come closer.
-			if (settings.freeze && player && p->binding.bound) {
+			if (p->binding.bound) {
+				p->cinema = p->binding.bigScreen;
+			}
+			const bool  cinema = p->cinema;
+			const bool  freezeOn = cinema ? settings.cinemaFreeze : settings.freeze;
+			const float freezeDistance = cinema ? settings.cinemaFreezeDistance : settings.freezeDistance;
+			const float freezeSeconds = cinema ? settings.cinemaFreezeSeconds : settings.freezeSeconds;
+			const bool  offOn = cinema ? settings.cinemaAutoOff : settings.autoOff;
+			const float offDistance = cinema ? settings.cinemaAutoOffDistance : settings.autoOffDistance;
+			const float offSeconds = cinema ? settings.cinemaAutoOffSeconds : settings.autoOffSeconds;
+			if (freezeOn && player && p->binding.bound) {
 				auto*       g = p->binding.geometry.get();
 				const auto  c = g ? g->worldBound.center : ref->GetPosition();
 				const float r = g ? std::max(g->worldBound.fRadius, 1.0f) : 100.0f;
@@ -899,7 +909,7 @@ namespace fv
 					const float angle = std::acos(std::clamp(cosAngle, -1.0f, 1.0f));
 					inView = angle < 1.15f + std::asin(std::min(1.0f, r / d));  // ~66 degrees + the screen's size
 				}
-				const bool unseen = d > settings.freezeDistance || !inView;
+				const bool unseen = d > freezeDistance || !inView;
 				const auto now = std::chrono::steady_clock::now();
 				if (!unseen) {
 					p->unseen = false;
@@ -907,7 +917,7 @@ namespace fv
 				} else if (!p->unseen) {
 					p->unseen = true;
 					p->unseenSince = now;
-				} else if (!p->frozen && now - p->unseenSince >= std::chrono::duration<float>(settings.freezeSeconds)) {
+				} else if (!p->frozen && now - p->unseenSince >= std::chrono::duration<float>(freezeSeconds)) {
 					p->frozen = true;
 					log::info("{}: paused ({})", p->name, inView ? "far away" : "out of view");
 				}
@@ -945,19 +955,19 @@ namespace fv
 
 			// walked away: turn the screen off after a while (frees its decoder, textures and slot) and remember
 			// where it was, to carry on when you come back
-			if ((settings.autoOff || goOff) && player) {
+			if ((offOn || goOff) && player) {
 				auto*      g = p->binding.bound ? p->binding.geometry.get() : nullptr;
 				const auto where = g ? g->worldBound.center : ref->GetPosition();
-				const float limit = settings.autoOffDistance;
+				const float limit = offDistance;
 				const float ax = where.x - playerPos.x, ay = where.y - playerPos.y, az = where.z - playerPos.z;
 				const auto  now = std::chrono::steady_clock::now();
-				const bool farAway = settings.autoOff && std::sqrt(ax * ax + ay * ay + az * az) > limit;
+				const bool farAway = offOn && std::sqrt(ax * ax + ay * ay + az * az) > limit;
 				if (farAway || goOff) {
 					if (!p->away) {
 						p->away = true;
 						p->awaySince = now;
 					}
-					if (goOff || now - p->awaySince >= std::chrono::duration<float>(settings.autoOffSeconds)) {
+					if (goOff || now - p->awaySince >= std::chrono::duration<float>(offSeconds)) {
 						Sleeper s;
 						s.ref = p->ref;
 						s.formID = p->formID;
@@ -970,11 +980,12 @@ namespace fv
 						s.name = p->name;
 						s.workshop = p->workshop;
 						s.paused = p->userPaused.load();
+						s.cinema = cinema;
 						if (goOff) {
 							log::info("{}: you're in another settlement; turned off until you're back (at {:.0f}s)", p->name,
 								static_cast<double>(s.position) / 1e7);
 						} else {
-							log::info("{}: you've been away {:.0f}s; turned off until you come back (at {:.0f}s)", p->name, settings.autoOffSeconds,
+							log::info("{}: you've been away {:.0f}s; turned off until you come back (at {:.0f}s)", p->name, offSeconds,
 								static_cast<double>(s.position) / 1e7);
 						}
 						_sleepers.push_back(std::move(s));
@@ -1067,7 +1078,7 @@ namespace fv
 				auto       mine = it->workshop.get();
 				auto       here = _playerWorkshopKnown ? _playerWorkshop.get() : RE::NiPointer<RE::TESObjectREFR>{};
 				const bool elsewhere = settings.offInOtherSettlement && mine && here && here.get() != mine.get();
-				const bool wake = (!settings.autoOff || isNear) && !elsewhere;
+				const bool wake = (!(it->cinema ? settings.cinemaAutoOff : settings.autoOff) || isNear) && !elsewhere;
 				if (wake && ref->Get3D()) {
 					if (auto* tasks = F4SE::GetTaskInterface()) {
 						tasks->AddTask([this, s = *it]() {
@@ -1918,7 +1929,7 @@ namespace fv
 					if (b.glowMap) {
 						auto& glow = _glowSlots[p.slot];
 						if (glow.compSRV) {
-							glow.Patch(p.slot + 16, glow.compSRV.Get());
+							glow.Patch(p.slot + kMaxSlots, glow.compSRV.Get());
 						}
 					}
 					want = slot.compSRV.Get();
@@ -2073,7 +2084,7 @@ namespace fv
 					s.paused = paused != 0;
 					s.position = position;
 					s.where = where;
-					s.wakeDistance = Settings::Get().autoOffDistance * 0.9f;
+					s.wakeDistance = std::max(Settings::Get().autoOffDistance, Settings::Get().cinemaAutoOffDistance) * 0.9f;
 					s.name = Screen::RefName(ref);
 					if (workshop) {
 						if (const auto ws = a_intfc->ResolveFormID(workshop)) {

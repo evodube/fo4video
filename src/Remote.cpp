@@ -969,7 +969,7 @@ namespace fv::Remote
 			dirty |= Checkbox("Loop videos", &s.loop);
 			dirty |= Checkbox("Pause in menus (Esc, Pip-Boy, loading...)", &s.pauseInMenus);
 			dirty |= Checkbox("Pause when the game is in the background (alt-tab)", &s.pauseUnfocused);
-			dirty |= SliderInt("Screens playing at once", &s.maxScreens, 1, 16, "%d");
+			dirty |= SliderInt("Screens playing at once", &s.maxScreens, 1, 20, "%d");
 			dirty |= Checkbox("Screens playing the same video stay in step", &s.syncSameVideo);
 			Tip("Same file name = same picture at the same moment on every screen; pausing or skipping one does all of them.");
 			dirty |= Checkbox("Show messages (playing, paused, off)", &s.showMessages);
@@ -1007,24 +1007,31 @@ namespace fv::Remote
 			dirty |= Checkbox("Decode videos on the graphics card (test)", &s.gpuDecode);
 			Tip("Much less work for the CPU and memory. Applies to videos started from now on. If a screen stays blank or "
 				"looks wrong, untick it and start the video again.");
-			dirty |= Checkbox("Pause the video when far away or out of view", &s.freeze);
+			dirty |= Checkbox("Pause the video when far away or out of view (TVs, projectors)", &s.freeze);
 			Tip("Picture and sound pause, and carry on from the same spot when you look at the screen or come closer.");
 			if (s.freeze) {
 				dirty |= Meters("...further away than##freeze", &s.freezeDistance, 300.0f, "Or whenever the screen isn't in front of you.");
 				dirty |= SliderFloat("...for longer than##freeze", &s.freezeSeconds, 0.0f, 120.0f, "%.0f s");
 			}
-			dirty |= Checkbox("Turn screens off while you're in another settlement", &s.offInOtherSettlement);
-			Tip("Uses the game's own build areas, so modded settlements work too. They remember the video and come back on when you "
-				"return. Out in the wasteland only the distance below counts.");
-			if (s.offInOtherSettlement) {
-				dirty |= SliderFloat("...after##settlement", &s.otherSettlementSeconds, 0.0f, 60.0f, "%.0f s");
-			}
-			dirty |= Checkbox("Turn screens off when you walk away", &s.autoOff);
+			dirty |= Checkbox("Turn screens off when you walk away (TVs, projectors)", &s.autoOff);
 			Tip("Saves memory and frees the screen's place. It remembers the video and where it was, and carries on from there when "
 				"you come back.");
 			if (s.autoOff) {
-				dirty |= Meters("...further away than##off", &s.autoOffDistance, 300.0f, "Measured from the screen, the cinema included.");
+				dirty |= Meters("...further away than##off", &s.autoOffDistance, 300.0f, "TVs and projectors. The cinema has its own below.");
 				dirty |= SliderFloat("...for longer than##off", &s.autoOffSeconds, 0.0f, 120.0f, "%.0f s");
+			}
+			// the drive-in: seen and heard from much further away, so its own distances
+			dirty |= Checkbox("Cinema: pause when far away or out of view", &s.cinemaFreeze);
+			Tip("Picture and sound pause, and carry on from the same spot when you look at the screen or come closer.");
+			if (s.cinemaFreeze) {
+				dirty |= Meters("...further away than##cfreeze", &s.cinemaFreezeDistance, 600.0f, "Or whenever the drive-in screen isn't in front of you.");
+				dirty |= SliderFloat("...for longer than##cfreeze", &s.cinemaFreezeSeconds, 0.0f, 120.0f, "%.0f s");
+			}
+			dirty |= Checkbox("Cinema: turn off when you walk away", &s.cinemaAutoOff);
+			Tip("Remembers the film and where it was, and carries on from there when you come back.");
+			if (s.cinemaAutoOff) {
+				dirty |= Meters("...further away than##coff", &s.cinemaAutoOffDistance, 600.0f, "Measured from the drive-in screen.");
+				dirty |= SliderFloat("...for longer than##coff", &s.cinemaAutoOffSeconds, 0.0f, 120.0f, "%.0f s");
 			}
 
 			SeparatorText("Picking a screen");
