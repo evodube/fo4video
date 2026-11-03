@@ -1159,6 +1159,22 @@ namespace fv::Screen
 		// depend on the time of day or which way it faces. The screen's own property is put back on Unbind.
 		// The original alpha property lets the texture's alpha cut or blend the mesh: then the see-through areas of
 		// the face-only glow would show up on the lit screen too.
+		// BSOrderedNode ("OrderedRenderingNode" in VotW meshes) draws its children as one group, in order. Putting a
+		// blended mesh in there dragged its neighbours (the screen's metal posts, frame) into the blended pass with
+		// different lighting: they came out bright.
+		bool IsOrderedNode(RE::NiAVObject* a_obj)
+		{
+			if (!a_obj) {
+				return false;
+			}
+			for (const RE::NiRTTI* rtti = a_obj->GetRTTI(); rtti; rtti = rtti->GetBaseRTTI()) {
+				if (rtti->GetName() && std::string_view(rtti->GetName()) == "BSOrderedNode") {
+					return true;
+				}
+			}
+			return Lower(Str(a_obj->name)).find("orderedrenderingnode") != std::string::npos;
+		}
+
 		bool UsesAlpha(RE::BSGeometry* a_geom)
 		{
 			auto* alpha = a_geom ? static_cast<RE::NiAlphaProperty*>(a_geom->properties[0].get()) : nullptr;
@@ -1214,7 +1230,11 @@ namespace fv::Screen
 			if (a_faceOnly) {
 				// a copy of the mesh, nudged a hair in front of the video face, glowing only where the video is.
 				// The real screen keeps its own lit shader: its back, frame and pole look exactly as without video.
-				auto* parent = a_geom->parent;
+				// hang the copy outside any ordered-rendering group (see IsOrderedNode)
+				RE::NiNode* parent = a_geom->parent;
+				while (parent && parent->parent && IsOrderedNode(parent)) {
+					parent = parent->parent;
+				}
 				RE::NiPointer<RE::NiObject> copyObj(parent ? a_geom->Clone() : nullptr);
 				auto* copy = copyObj ? copyObj->IsGeometry() : nullptr;
 				if (!copy) {
@@ -1236,11 +1256,19 @@ namespace fv::Screen
 					if (a_binding.haveGlowNormal) {
 						offset = a_binding.glowNormal * 0.3f;  // world units, about 4 mm: no flicker against the real face
 					}
-					copy->local = a_geom->local;
-					const float parentScale = parent->world.scale != 0.0f ? parent->world.scale : 1.0f;
-					copy->local.translate += parent->world.rotate.Transpose() * (offset / parentScale);
-					copy->world = a_geom->world;
+					// placed by its world position, relative to the node it hangs from (may be higher up than the screen's own)
+					const auto& A = parent->world;
+					const auto& G = a_geom->world;
+					const float parentScale = A.scale != 0.0f ? A.scale : 1.0f;
+					const auto  inv = A.rotate.Transpose();
+					copy->local.rotate = inv * G.rotate;
+					copy->local.translate = inv * ((G.translate + offset - A.translate) / parentScale);
+					copy->local.scale = G.scale / parentScale;
+					copy->world = G;
 					copy->world.translate += offset;
+					copy->worldBound = a_geom->worldBound;
+					copy->worldBound.center += offset;
+					copy->SetAppCulled(false);
 					parent->AttachChild(copy, true);
 					a_binding.overlay = RE::NiPointer<RE::NiAVObject>(copy);
 					a_binding.overlayParent = RE::NiPointer<RE::NiNode>(parent);
@@ -1249,14 +1277,15 @@ namespace fv::Screen
 					a_binding.effectMaterial = em;
 					a_binding.selfLit = true;
 					RebuildRenderPasses(created);
-					log::info("'{}': only the video face glows", a_binding.geometryName);
+					log::info("'{}': only the picture glows (glowing copy under '{}'{})", a_binding.geometryName, Str(parent->name),
+						parent != a_geom->parent ? ", outside the ordered group" : "");
 					return;
 				}
 			}
 			// late pass: an effect shader drawn with the opaque world got painted over by whatever stands behind the
 			// screen (the drive-in's catwalk showed through the top of the picture at night)
 			RE::NiPointer<RE::NiProperty> alpha;
-			if (Settings::Get().selfLitLatePass) {
+			if (Settings::Get().selfLitLatePass && !IsOrderedNode(a_geom->parent)) {
 				alpha = RE::NiPointer<RE::NiProperty>(NewBlendAlpha(false));
 			}
 			RE::NiPointer<RE::NiProperty> previousAlpha = a_geom->properties[0];

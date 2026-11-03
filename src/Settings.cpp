@@ -111,7 +111,7 @@ namespace fv
 		put(L"Screen", L"fBrightness", f(brightness));
 		put(L"Screen", L"bSelfLitScreens", b(selfLit));
 		put(L"Screen", L"bSelfLitLatePass", b(selfLitLatePass));
-		put(L"Screen", L"bSelfLitFaceOnly", b(selfLitFaceOnly));
+		put(L"Screen", L"bGlowPictureOnly", b(selfLitFaceOnly));
 		put(L"Screen", L"fFrameBrightness", f(frameLight));
 		put(L"Screen", L"fSelfLitBrightness", f(selfLitBrightness));
 
@@ -172,7 +172,7 @@ namespace fv
 		selfLit = ReadBool(L"Screen", L"bSelfLitScreens", selfLit);
 		selfLitBrightness = std::clamp(ReadFloat(L"Screen", L"fSelfLitBrightness", selfLitBrightness), 0.0f, 4.0f);
 		selfLitLatePass = ReadBool(L"Screen", L"bSelfLitLatePass", selfLitLatePass);
-		selfLitFaceOnly = ReadBool(L"Screen", L"bSelfLitFaceOnly", selfLitFaceOnly);
+		selfLitFaceOnly = ReadBool(L"Screen", L"bGlowPictureOnly", selfLitFaceOnly);
 		frameLight = std::clamp(ReadFloat(L"Screen", L"fFrameBrightness", frameLight), 0.0f, 3.0f);
 		bigScreenBrightness = std::clamp(ReadFloat(L"Screen", L"fBigScreenBrightness", bigScreenBrightness), 0.1f, 4.0f);
 		bigScreenVHS = std::clamp(ReadFloat(L"Screen", L"fBigScreenVHS", bigScreenVHS), 0.0f, 1.0f);
