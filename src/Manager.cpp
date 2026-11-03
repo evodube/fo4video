@@ -577,7 +577,7 @@ namespace fv
 		const auto&      settings = Settings::Get();
 		std::scoped_lock lock(_lock);
 
-		// Build mode: show every screen with its own look (and keep the video paused) until it's closed
+		// Build mode: screens go dark (video paused) until it's closed
 		static const RE::BSFixedString workshopMenu("WorkshopMenu");
 		auto*                          ui = RE::UI::GetSingleton();
 		const bool                     buildMode = ui && ui->GetMenuOpen(workshopMenu);
@@ -591,10 +591,8 @@ namespace fv
 				continue;
 			}
 			if (buildMode) {
-				if (p->binding.bound) {
-					Screen::Unbind(p->binding);
-				}
-				p->rebindCooldown = 0;  // put it back right away when build mode closes
+				// Leave the scene graph alone while the workshop works on it (highlighting, moving, scrapping):
+				// changing materials under it crashed the game. The render thread shows the screens dark instead.
 				continue;
 			}
 			auto ref = p->ref.get();
@@ -1080,6 +1078,14 @@ namespace fv
 			++it;
 
 			if (!slot.niTexture) {
+				continue;
+			}
+			if (_inBuildMode) {
+				// build mode: no video anywhere (the screen shows our dark placeholder), and nothing plays
+				slot.Unpatch();
+				if (p.media) {
+					p.media->SetPaused(true);
+				}
 				continue;
 			}
 			const bool srgb = settings.srgb < 0 ? p.srgb.load() : settings.srgb > 0;

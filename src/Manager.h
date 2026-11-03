@@ -151,6 +151,6 @@ namespace fv
 		};
 		std::unordered_map<std::uint32_t, Prefs> _prefs;  // remote volume/mute per screen, kept across videos
 		bool                _wasPaused{ false };
-		bool                _inBuildMode{ false };
+		std::atomic<bool>   _inBuildMode{ false };
 	};
 }
