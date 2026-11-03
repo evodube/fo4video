@@ -53,6 +53,11 @@ namespace fv
 		bool                                classic{ false };       // TV screen: whole texture, untouched UVs (like 0.1)
 		bool                                twoSidedCleared{ false };  // we stopped drawing the back of the sheet
 		bool                                bigScreen{ false };        // the drive-in: own brightness / VHS look
+		// self-lit: a lit (projector) screen temporarily drawn with a glowing effect shader, like a TV
+		bool                                selfLit{ false };
+		RE::NiPointer<RE::NiProperty>       originalProp;   // the screen's own lighting shader property
+		RE::NiPointer<RE::NiProperty>       effectProp;     // ours
+		RE::BSShaderMaterial*               effectMaterial{ nullptr };
 	};
 
 	namespace Screen

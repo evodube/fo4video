@@ -657,6 +657,10 @@ namespace fv::Remote
 				dirty = true;
 			}
 			Tip("Off: stretch every video to fill its screen. Applies when a video starts (or press Apply below).");
+			dirty |= Checkbox("Projector & cinema screens glow like TVs", &s.selfLit);
+			Tip("Same brightness day and night, whichever way the screen faces. Off: lit by the world (dark at night). "
+				"Press Apply below to switch the screens playing now.");
+			dirty |= Percent("Projector & cinema glow brightness", &s.selfLitBrightness, 4.0f, "100% = the video as is.");
 			dirty |= Checkbox("Cinema: stretch to fill the screen", &s.bigScreenStretch);
 			dirty |= Percent("Cinema brightness", &s.bigScreenBrightness, 4.0f, "100% = as is, up to 400%. Only the drive-in screen. Applies right away.");
 			dirty |= Percent("Cinema VHS look", &s.bigScreenVHS, 1.0f, "Soft picture, colour bleed, faded colours, faint scanlines. 0% = off.");

@@ -1128,6 +1128,56 @@ namespace fv::Screen
 
 	}
 
+	namespace
+	{
+		// Draw a lit screen with a glowing (effect) shader carrying the video, like a TV, so its brightness doesn't
+		// depend on the time of day or which way it faces. The screen's own property is put back on Unbind.
+		void MakeSelfLit(ScreenBinding& a_binding, RE::BSGeometry* a_geom, RE::BSShaderProperty* a_litProp, RE::BSShaderMaterial* a_litMat,
+			RE::NiTexture* a_slotTexture)
+		{
+			using F = RE::BSShaderProperty::EShaderPropertyFlag;
+			auto* created = RE::BSEffectShaderProperty::Create();
+			if (!created) {
+				return;
+			}
+			RE::NiPointer<RE::NiProperty> keep(created);
+			if (!created->material || created->material->GetType() != RE::BSShaderMaterial::Type::kEffect) {
+				log::warn("'{}': no effect material to glow with; staying lit by the world", a_binding.geometryName);
+				return;
+			}
+			created->SetMaterial(created->material, true);  // our own copy
+			auto* em = static_cast<RE::BSEffectShaderMaterial*>(created->material);
+			if (!em) {
+				return;
+			}
+			const auto& settings = Settings::Get();
+			em->baseTexture = RE::NiPointer<RE::NiTexture>(a_slotTexture);
+			em->baseColor = RE::NiColorA{ 1.0f, 1.0f, 1.0f, 1.0f };
+			em->baseColorScale = settings.selfLitBrightness;
+			for (int i = 0; i < 2; ++i) {
+				em->texCoordOffset[i] = a_litMat->texCoordOffset[i];
+				em->texCoordScale[i] = a_litMat->texCoordScale[i];
+			}
+			created->SetFlag(F::kZBufferTest, true);
+			created->SetFlag(F::kZBufferWrite, true);
+			created->SetFlag(F::kSkinned, a_litProp->flags.all(F::kSkinned));
+			created->SetFlag(F::kTwoSided, a_litProp->flags.all(F::kTwoSided));
+			created->SetFlag(F::kEffectLighting, false);
+			created->SetFlag(F::kGrayscaleToPaletteColor, false);
+			created->SetFlag(F::kGrayscaleToPaletteAlpha, false);
+			if (!created->SetupGeometry(a_geom)) {
+				log::warn("'{}': the glowing shader doesn't fit this mesh; staying lit by the world", a_binding.geometryName);
+				return;
+			}
+			a_binding.originalProp = a_geom->properties[1];
+			a_geom->properties[1] = keep;
+			a_binding.effectProp = keep;
+			a_binding.effectMaterial = em;
+			a_binding.selfLit = true;
+			RebuildRenderPasses(created);
+		}
+	}
+
 	bool Bind(RE::TESObjectREFR* a_ref, RE::NiTexture* a_slotTexture, ScreenBinding& a_binding, int a_forceIndex)
 	{
 		a_binding = {};
@@ -1482,6 +1532,11 @@ namespace fv::Screen
 			}
 		}
 
+		a_binding.geometryName = candidates[index].name;
+		if (settings.selfLit && !a_binding.isEffect && !a_binding.classic && geom->IsTriShape()) {
+			MakeSelfLit(a_binding, geom, prop, mat, a_slotTexture);
+		}
+
 		a_binding.owner = candidates[index].owner->GetHandle();
 		a_binding.ownerKey = candidates[index].ownerKey;
 		a_binding.ownerIsNearby = candidates[index].nearby;
@@ -1537,6 +1592,12 @@ namespace fv::Screen
 		if (!a_binding.bound) {
 			a_binding = {};
 			return;
+		}
+		if (a_binding.selfLit && a_binding.geometry && a_binding.geometry->properties[1].get() == a_binding.effectProp.get()) {
+			a_binding.geometry->properties[1] = a_binding.originalProp;  // the screen's own (lit) shader back
+			if (auto* own = GetShaderProperty(a_binding.geometry.get())) {
+				RebuildRenderPasses(own);
+			}
 		}
 
 		auto* prop = GetShaderProperty(a_binding.geometry.get());
@@ -1607,6 +1668,10 @@ namespace fv::Screen
 			return false;
 		}
 		auto* prop = GetShaderProperty(geom);
+		if (a_binding.selfLit) {
+			return prop && prop == a_binding.effectProp.get() && prop->material == a_binding.effectMaterial &&
+			       static_cast<RE::BSEffectShaderMaterial*>(a_binding.effectMaterial)->baseTexture.get() == a_binding.slotTexture.get();
+		}
 		if (!prop || prop->material != a_binding.material) {
 			return false;
 		}
@@ -1634,6 +1699,10 @@ namespace fv::Screen
 		for (int i = 0; i < 2; ++i) {
 			mat->texCoordOffset[i] = a_binding.uvOffset;
 			mat->texCoordScale[i] = a_binding.uvScale;
+			if (a_binding.selfLit && a_binding.effectMaterial) {
+				a_binding.effectMaterial->texCoordOffset[i] = a_binding.uvOffset;
+				a_binding.effectMaterial->texCoordScale[i] = a_binding.uvScale;
+			}
 		}
 	}
 

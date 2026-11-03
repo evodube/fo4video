@@ -109,6 +109,8 @@ namespace fv
 		put(L"Screen", L"bStopScreenAnimation", b(stopScreenAnimation));
 		put(L"Screen", L"fNearbyObjectRadius", f(nearbyRadius));
 		put(L"Screen", L"fBrightness", f(brightness));
+		put(L"Screen", L"bSelfLitScreens", b(selfLit));
+		put(L"Screen", L"fSelfLitBrightness", f(selfLitBrightness));
 
 		put(L"Audio", L"bEnableAudio", b(enableAudio));
 		put(L"Audio", L"fVolume", f(volume));
@@ -164,6 +166,8 @@ namespace fv
 		falloffCurve = std::clamp(ReadFloat(L"Audio", L"fFalloffCurve", falloffCurve), 0.25f, 8.0f);
 		bigScreenRadius = ReadFloat(L"Audio", L"fBigScreenSize", bigScreenRadius);
 		bigScreenStretch = ReadBool(L"Screen", L"bStretchOnBigScreens", bigScreenStretch);
+		selfLit = ReadBool(L"Screen", L"bSelfLitScreens", selfLit);
+		selfLitBrightness = std::clamp(ReadFloat(L"Screen", L"fSelfLitBrightness", selfLitBrightness), 0.0f, 4.0f);
 		bigScreenBrightness = std::clamp(ReadFloat(L"Screen", L"fBigScreenBrightness", bigScreenBrightness), 0.1f, 4.0f);
 		bigScreenVHS = std::clamp(ReadFloat(L"Screen", L"fBigScreenVHS", bigScreenVHS), 0.0f, 1.0f);
 		startVolume = std::clamp(ReadFloat(L"Audio", L"fStartVolume", startVolume), 0.0f, 2.0f);
