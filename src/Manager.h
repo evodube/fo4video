@@ -103,6 +103,7 @@ namespace fv
 		void RemotePower(RE::TESObjectREFR* a_ref);                  // off if playing, else on
 		void RemoteSeek(std::uint32_t a_formID, float a_seconds);    // any thread
 		void RemoteCycleBacklight(std::uint32_t a_formID);          // any thread: off -> low -> medium -> high
+		void RebindAll();                                            // main thread: re-fit every playing screen (after settings changes)
 		void RemoteSetVolume(std::uint32_t a_formID, float a_volume);  // any thread
 		void RemoteSetMuted(std::uint32_t a_formID, bool a_muted);     // any thread
 		RemoteView View(std::uint32_t a_formID);                      // any thread

@@ -51,6 +51,7 @@ namespace fv
 		float bigMaxDistance{ 12000.0f };
 
 		void Load();
+		void Save() const;  // writes everything the settings page can change back to RealVideos.ini
 
 		static Settings& Get()
 		{

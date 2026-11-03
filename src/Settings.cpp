@@ -81,6 +81,47 @@ namespace fv
 		}
 	}
 
+	void Settings::Save() const
+	{
+		auto put = [](const wchar_t* a_section, const wchar_t* a_key, const std::wstring& a_value) {
+			::WritePrivateProfileStringW(a_section, a_key, a_value.c_str(), kIniPath);
+		};
+		auto b = [](bool a_v) { return std::wstring(a_v ? L"1" : L"0"); };
+		auto f = [](float a_v) { return std::format(L"{:.3g}", a_v); };
+		auto i = [](int a_v) { return std::to_wstring(a_v); };
+
+		put(L"General", L"bLoop", b(loop));
+		put(L"General", L"bPauseInMenus", b(pauseInMenus));
+		put(L"General", L"bPauseWhenAltTabbed", b(pauseUnfocused));
+		put(L"General", L"iMaxScreens", i(maxScreens));
+		put(L"General", L"bOnlySupportedScreens", b(onlySupportedScreens));
+		put(L"General", L"bAimToSelect", b(aimToSelect));
+		put(L"General", L"fAimDistance", f(aimDistance));
+
+		put(L"Screen", L"iSRGB", i(srgb));
+		put(L"Screen", L"iAspectMode", i(aspectMode));
+		put(L"Screen", L"bStretchOnBigScreens", b(bigScreenStretch));
+		put(L"Screen", L"fBigScreenBrightness", f(bigScreenBrightness));
+		put(L"Screen", L"fBigScreenVHS", f(bigScreenVHS));
+		put(L"Screen", L"bOnlyInsideScreenArea", b(composite));
+		put(L"Screen", L"bShowOnBothSides", b(bothSides));
+		put(L"Screen", L"bHideOverlays", b(hideOverlays));
+		put(L"Screen", L"bStopScreenAnimation", b(stopScreenAnimation));
+		put(L"Screen", L"fNearbyObjectRadius", f(nearbyRadius));
+		put(L"Screen", L"fBrightness", f(brightness));
+
+		put(L"Audio", L"bEnableAudio", b(enableAudio));
+		put(L"Audio", L"fVolume", f(volume));
+		put(L"Audio", L"fStartVolume", f(startVolume));
+		put(L"Audio", L"fMinDistance", f(minDistance));
+		put(L"Audio", L"fMaxDistance", f(maxDistance));
+		put(L"Audio", L"fFalloffCurve", f(falloffCurve));
+		put(L"Audio", L"fBigScreenSize", f(bigScreenRadius));
+		put(L"Audio", L"fBigScreenMinDistance", f(bigMinDistance));
+		put(L"Audio", L"fBigScreenMaxDistance", f(bigMaxDistance));
+		log::info("settings saved to RealVideos.ini");
+	}
+
 	void Settings::Load()
 	{
 		enableHotkeys = ReadBool(L"General", L"bEnableHotkeys", enableHotkeys);

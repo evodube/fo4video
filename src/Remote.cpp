@@ -595,6 +595,136 @@ namespace fv::Remote
 			}
 		}
 
+		// ---- settings page in the framework's menu ----
+
+		void Tip(const char* a_text)
+		{
+			if (IsItemHovered()) {
+				SetTooltip("%s", a_text);
+			}
+		}
+
+		bool Percent(const char* a_label, float* a_value, float a_max, const char* a_tip)
+		{
+			float pct = *a_value * 100.0f;
+			const bool changed = SliderFloat(a_label, &pct, 0.0f, a_max * 100.0f, "%.0f%%");
+			Tip(a_tip);
+			if (changed) {
+				*a_value = pct / 100.0f;
+			}
+			return changed;
+		}
+
+		bool Meters(const char* a_label, float* a_units, float a_maxMeters, const char* a_tip)
+		{
+			float m = *a_units / 70.0f;  // ~70 game units per metre
+			const bool changed = SliderFloat(a_label, &m, 0.0f, a_maxMeters, "%.0f m");
+			Tip(a_tip);
+			if (changed) {
+				*a_units = m * 70.0f;
+			}
+			return changed;
+		}
+
+		void __stdcall RenderSettings()
+		{
+			LoadState();
+			auto&       s = Settings::Get();
+			static bool dirty = false;
+
+			SeparatorText("Playback");
+			dirty |= Checkbox("Loop videos", &s.loop);
+			dirty |= Checkbox("Pause in menus (Esc, Pip-Boy, loading...)", &s.pauseInMenus);
+			dirty |= Checkbox("Pause when the game is in the background (alt-tab)", &s.pauseUnfocused);
+			dirty |= SliderInt("Screens playing at once", &s.maxScreens, 1, 16, "%d");
+
+			SeparatorText("Picking a screen");
+			dirty |= Checkbox("Use the screen under the crosshair", &s.aimToSelect);
+			Tip("Off: hotkeys and the remote use the object clicked in the console.");
+			dirty |= Meters("How far you can aim", &s.aimDistance, 400.0f, "Screens further away than this aren't picked by aiming.");
+			dirty |= Checkbox("Only TVs, projectors and the cinema", &s.onlySupportedScreens);
+			Tip("Off: F9/F10 work on any object (posters, signs...).");
+
+			SeparatorText("Picture");
+			bool bars = s.aspectMode == 1;
+			if (Checkbox("Keep the video's shape (black bars)", &bars)) {
+				s.aspectMode = bars ? 1 : 0;
+				dirty = true;
+			}
+			Tip("Off: stretch every video to fill its screen. Applies when a video starts (or press Apply below).");
+			dirty |= Checkbox("Cinema: stretch to fill the screen", &s.bigScreenStretch);
+			dirty |= Percent("Cinema brightness", &s.bigScreenBrightness, 2.0f, "100% = as is. Applies right away.");
+			dirty |= Percent("Cinema VHS look", &s.bigScreenVHS, 1.0f, "Soft picture, colour bleed, faded colours, faint scanlines. 0% = off.");
+			dirty |= Percent("TV brightness (glowing screens)", &s.brightness, 3.0f, "Brightness of TVs and other glowing screens.");
+			dirty |= Checkbox("Projectors: draw the video only inside the screen", &s.composite);
+			Tip("Off: the video covers the whole mesh, frame included.");
+			dirty |= Checkbox("Two-sided screens: show on both sides", &s.bothSides);
+			dirty |= Checkbox("Stop the screen's own animation while playing", &s.stopScreenAnimation);
+			dirty |= Checkbox("Hide glowing layers over the screen", &s.hideOverlays);
+			Text("Colours");
+			SameLine();
+			dirty |= RadioButton("Auto", &s.srgb, -1);
+			SameLine();
+			dirty |= RadioButton("Linear", &s.srgb, 0);
+			SameLine();
+			dirty |= RadioButton("sRGB", &s.srgb, 1);
+			Tip("Try Linear or sRGB if colours look washed out or too dark.");
+			if (Button("Apply to the screens playing now")) {
+				if (auto* tasks = F4SE::GetTaskInterface()) {
+					tasks->AddTask([]() { Manager::Get().RebindAll(); });
+				}
+			}
+
+			SeparatorText("Sound");
+			dirty |= Checkbox("Sound on", &s.enableAudio);
+			Tip("Applies when a video starts.");
+			dirty |= Percent("Master volume", &s.volume, 2.0f, "Every screen.");
+			dirty |= Percent("Volume a screen starts at", &s.startVolume, 2.0f, "What the remote's middle button starts at.");
+			dirty |= Meters("TVs/projectors: full volume within", &s.minDistance, 50.0f, "");
+			dirty |= Meters("TVs/projectors: silent beyond", &s.maxDistance, 150.0f, "");
+			if (s.maxDistance < s.minDistance + 1.0f) {
+				s.maxDistance = s.minDistance + 1.0f;
+			}
+			dirty |= Meters("Cinema: full volume within", &s.bigMinDistance, 150.0f, "");
+			dirty |= Meters("Cinema: silent beyond", &s.bigMaxDistance, 600.0f, "");
+			if (s.bigMaxDistance < s.bigMinDistance + 1.0f) {
+				s.bigMaxDistance = s.bigMinDistance + 1.0f;
+			}
+			dirty |= SliderFloat("Fade with distance", &s.falloffCurve, 0.5f, 4.0f, "%.1f");
+			Tip("1 = fades evenly, 2 = smooth (default), higher = quieter sooner.");
+
+			SeparatorText("Remote");
+			{
+				float opacity = g_opacity * 100.0f;
+				if (SliderFloat("Remote opacity", &opacity, 20.0f, 100.0f, "%.0f%%")) {
+					g_opacity = opacity / 100.0f;
+					SaveState();
+				}
+				if (Checkbox("Lock the remote in place", &g_locked)) {
+					SaveState();
+				}
+				if (Button("Move the remote back to the right side")) {
+					g_havePos = false;
+					::WritePrivateProfileStringA("Remote", "X", nullptr, kStateIni);
+					::WritePrivateProfileStringA("Remote", "Y", nullptr, kStateIni);
+				}
+			}
+			TextDisabled("Keys: remote F6, play/next F9, test pattern F10, stop F11, mesh F7, log F8 (change them in RealVideos.ini)");
+
+			Separator();
+			if (Button("Save to RealVideos.ini")) {
+				s.Save();
+				dirty = false;
+			}
+			SameLine();
+			if (Button("Reload from RealVideos.ini")) {
+				s.Load();
+			}
+			if (dirty) {
+				TextDisabled("Changes are live; Save keeps them for next time.");
+			}
+		}
+
 		void __stdcall RenderPage()
 		{
 			TextWrapped("Aim at a TV, projector or the drive-in screen and press the remote key (F6 by default) to control it. "
@@ -670,6 +800,7 @@ namespace fv::Remote
 		}
 		F4SEMenuFramework::SetSection("Real Videos");
 		F4SEMenuFramework::AddSectionItem("Now playing", RenderPage);
+		F4SEMenuFramework::AddSectionItem("Settings", RenderSettings);
 		g_window = F4SEMenuFramework::AddWindow(RenderWindow, true);
 		log::info("remote registered with F4SE Menu Framework{}", g_window ? "" : " (window could not be created)");
 	}

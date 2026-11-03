@@ -849,6 +849,18 @@ namespace fv
 		}
 	}
 
+	void Manager::RebindAll()
+	{
+		std::scoped_lock lock(_lock);
+		for (auto& p : _players) {
+			if (!p->stopping && p->binding.bound) {
+				Screen::Unbind(p->binding);  // Maintain binds it again with the current settings
+				p->rebindCooldown = 0;
+			}
+		}
+		Notify("Real Videos: settings applied to the playing screens");
+	}
+
 	void Manager::RemoteCycleBacklight(std::uint32_t a_formID)
 	{
 		std::scoped_lock lock(_lock);
