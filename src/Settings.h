@@ -45,7 +45,7 @@ namespace fv
 		float autoOffDistance{ 7000.0f };    // further than this (game units, ~100 m; never closer than you can hear it)
 		float autoOffSeconds{ 30.0f };       // ... for this long
 		bool  directionalSound{ true };      // sound comes from the screen's side
-		bool  syncSameVideo{ true };         // screens playing the same file play in step
+		bool  syncSameVideo{ false };        // (removed from the settings; kept off)
 		bool  showMessages{ true };          // "playing ... / ... off" messages at the top left
 		float allRadius{ 10500.0f };         // "all screens here": within this (~150 m)
 		bool  freeze{ true };                // picture stops updating when far or out of view (sound carries on)

@@ -99,7 +99,6 @@ namespace fv
 		put(L"General", L"fAutoOffSeconds", f(autoOffSeconds));
 		put(L"General", L"bFreezePicture", b(freeze));
 		put(L"Audio", L"bDirectionalSound", b(directionalSound));
-		put(L"General", L"bSyncSameVideo", b(syncSameVideo));
 		put(L"General", L"bShowMessages", b(showMessages));
 		put(L"General", L"fAllScreensRadius", f(allRadius));
 		put(L"General", L"fFreezeDistance", f(freezeDistance));
@@ -166,7 +165,6 @@ namespace fv
 		autoOffSeconds = std::clamp(ReadFloat(L"General", L"fAutoOffSeconds", autoOffSeconds), 0.0f, 3600.0f);
 		freeze = ReadBool(L"General", L"bFreezePicture", freeze);
 		directionalSound = ReadBool(L"Audio", L"bDirectionalSound", directionalSound);
-		syncSameVideo = ReadBool(L"General", L"bSyncSameVideo", syncSameVideo);
 		showMessages = ReadBool(L"General", L"bShowMessages", showMessages);
 		allRadius = std::max(0.0f, ReadFloat(L"General", L"fAllScreensRadius", allRadius));
 		freezeDistance = std::max(0.0f, ReadFloat(L"General", L"fFreezeDistance", freezeDistance));

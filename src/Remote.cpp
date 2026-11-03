@@ -970,8 +970,6 @@ namespace fv::Remote
 			dirty |= Checkbox("Pause in menus (Esc, Pip-Boy, loading...)", &s.pauseInMenus);
 			dirty |= Checkbox("Pause when the game is in the background (alt-tab)", &s.pauseUnfocused);
 			dirty |= SliderInt("Screens playing at once", &s.maxScreens, 1, 20, "%d");
-			dirty |= Checkbox("Screens playing the same video stay in step", &s.syncSameVideo);
-			Tip("Same file name = same picture at the same moment on every screen; pausing or skipping one does all of them.");
 			dirty |= Checkbox("Show messages (playing, paused, off)", &s.showMessages);
 			Tip("Off: only problems are shown at the top left.");
 			dirty |= Meters("\"All screens here\" reaches", &s.allRadius, 400.0f, "How far around you the ALL button and the All screens buttons reach.");
@@ -1204,7 +1202,7 @@ namespace fv::Remote
 					tasks->AddTask([]() { Manager::Get().AllScreens(nullptr, true); });
 				}
 			}
-			Tip("Every TV, projector and cinema screen around you (this settlement) plays the first video, all in step. "
+			Tip("Every TV, projector and cinema screen around you (this settlement) plays the first video. "
 				"The remote's ALL button plays the video on the screen you're aiming at.");
 			SameLine();
 			if (Button("All screens here off")) {
