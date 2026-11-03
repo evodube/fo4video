@@ -1260,6 +1260,26 @@ namespace fv::Screen
 			return true;
 		}
 
+		// The drive-in screen and other huge screens. Its world size can read small for a moment after build mode
+		// (the cinema then lost its stretch-to-fill), so the mesh's own size and the drive-in's name count too.
+		bool IsBigScreen(RE::BSGeometry* a_geom)
+		{
+			const auto& settings = Settings::Get();
+			if (!a_geom || settings.bigScreenRadius <= 0.0f) {
+				return false;
+			}
+			const float size = std::max(a_geom->worldBound.fRadius, a_geom->modelBound.fRadius * a_geom->world.scale);
+			if (size >= settings.bigScreenRadius) {
+				return true;
+			}
+			for (RE::NiAVObject* node = a_geom; node; node = node->parent) {
+				if (Lower(Str(node->name)).find("drivein") != std::string::npos) {
+					return true;
+				}
+			}
+			return false;
+		}
+
 		void MakeSelfLit(ScreenBinding& a_binding, RE::BSGeometry* a_geom, RE::BSShaderProperty* a_litProp, RE::BSShaderMaterial* a_litMat,
 			RE::NiTexture* a_slotTexture, bool a_faceOnly)
 		{
@@ -1776,7 +1796,7 @@ namespace fv::Screen
 
 		a_binding.geometryName = candidates[index].name;
 		const bool tryGlowMap = settings.glowMap && settings.selfLit && !a_binding.isEffect && !a_binding.classic && a_binding.composite &&
-		                        !(settings.bigScreenRadius > 0.0f && geom->worldBound.fRadius >= settings.bigScreenRadius) &&
+		                        !IsBigScreen(geom) &&
 		                        !prop->flags.all(RE::BSShaderProperty::EShaderPropertyFlag::kSkinned);
 		if (tryGlowMap && MakeGlowMap(a_binding, prop, mat, a_glowTexture)) {
 			// done: lit screen with a glowing picture
@@ -1797,7 +1817,7 @@ namespace fv::Screen
 		a_binding.candidateIndex = index;
 		a_binding.candidateCount = count;
 		a_binding.flip = userFlip;
-		a_binding.bigScreen = !a_binding.classic && settings.bigScreenRadius > 0.0f && geom->worldBound.fRadius >= settings.bigScreenRadius;
+		a_binding.bigScreen = !a_binding.classic && IsBigScreen(geom);
 		// big screens (the drive-in cinema) fill the whole screen instead of keeping black bars
 		if (settings.bigScreenStretch && a_binding.bigScreen) {
 			a_binding.screenAspect = 0.0f;

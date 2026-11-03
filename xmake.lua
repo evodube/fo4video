@@ -3,7 +3,7 @@
 includes("lib/commonlibf4")
 
 set_project("RealVideos")
-set_version("0.49.0")
+set_version("0.50.0")
 set_license("GPL-3.0")
 set_languages("c++23")
 set_warnings("allextra")

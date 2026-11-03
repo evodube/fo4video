@@ -761,7 +761,7 @@ namespace fv
 			if (p->binding.bound && player) {
 				// big screens (the drive-in) carry much further, measured from the screen itself
 				auto*      geom = p->binding.geometry.get();
-				const bool big = geom && settings.bigScreenRadius > 0.0f && geom->worldBound.fRadius >= settings.bigScreenRadius;
+				const bool big = geom && p->binding.bigScreen;
 				const auto pos = big ? geom->worldBound.center : ref->GetPosition();
 				const float dx = pos.x - playerPos.x;
 				const float dy = pos.y - playerPos.y;
