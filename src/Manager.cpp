@@ -16,6 +16,21 @@ namespace fv
 			RE::SendHUDMessage::ShowHUDMessage(a_message.c_str(), nullptr, false, false);
 		}
 
+		// everyday messages (playing, paused, off): can be switched off; problems always show
+		void NotifyInfo(const std::string& a_message)
+		{
+			if (Settings::Get().showMessages) {
+				Notify(a_message);
+			} else {
+				log::info("{}", a_message);
+			}
+		}
+
+		bool SameVideo(const std::wstring& a_a, const std::wstring& a_b)
+		{
+			return !a_a.empty() && _wcsicmp(std::filesystem::path(a_a).filename().c_str(), std::filesystem::path(a_b).filename().c_str()) == 0;
+		}
+
 		std::string Narrow(const std::wstring& a_str)
 		{
 			if (a_str.empty()) {
@@ -576,6 +591,18 @@ namespace fv
 				releaseSlot();
 				return false;
 			}
+			// another screen already playing this video: start in step with it
+			if (settings.syncSameVideo && a_startAt == 0) {
+				std::scoped_lock lock(_lock);
+				for (auto& o : _players) {
+					if (!o->stopping && o->media && o->kind == SourceKind::kVideo && SameVideo(o->file, a_file)) {
+						player->seekDelta = o->media->Clock();
+						player->userPaused = o->userPaused.load();
+						log::info("{}: in step with {} ({:.0f}s in)", refName, o->name, static_cast<double>(player->seekDelta.load()) / 1e7);
+						break;
+					}
+				}
+			}
 		}
 
 		Player* raw = player.get();
@@ -595,9 +622,9 @@ namespace fv
 			log::info("{}: back on ({}), carrying on at {:.0f}s", refName, Narrow(std::filesystem::path(a_file).filename().wstring()),
 				static_cast<double>(a_startAt) / 1e7);
 		} else if (a_kind == SourceKind::kVideo) {
-			Notify(std::format("Real Videos: playing {} on {}", Narrow(std::filesystem::path(a_file).filename().wstring()), refName));
+			NotifyInfo(std::format("Real Videos: playing {} on {}", Narrow(std::filesystem::path(a_file).filename().wstring()), refName));
 		} else {
-			Notify(std::format("Real Videos: test pattern on {}", refName));
+			NotifyInfo(std::format("Real Videos: test pattern on {}", refName));
 		}
 		return true;
 	}
@@ -888,8 +915,54 @@ namespace fv
 				const auto& pr = _prefs[PrefKey(*p)];
 				const float screenVolume = pr.volume < 0.0f ? settings.startVolume : pr.volume;
 				volume = pr.muted ? 0.0f : settings.volume * p->userVolume * screenVolume * gain;
+				// which side the screen is on, seen from the camera (from where you stand when you're right at it)
+				float pan = 0.0f;
+				if (settings.directionalSound && haveCam) {
+					const float hx = pos.x - camPos.x, hy = pos.y - camPos.y;
+					const float hl = std::sqrt(hx * hx + hy * hy);
+					if (hl > 70.0f) {
+						const float yaw = player->data.angle.z;
+						pan = (hx * std::cos(yaw) - hy * std::sin(yaw)) / hl;  // camera right = (cos yaw, -sin yaw)
+						pan *= std::clamp((hl - 70.0f) / 140.0f, 0.0f, 1.0f);  // fades in over the first few metres
+					}
+				}
+				p->pan = pan;
 			}
 			p->volume = volume;
+		}
+
+		// screens playing the same video stay in step: anyone more than a second and a half off the first is moved
+		if (settings.syncSameVideo && !buildMode) {
+			for (std::size_t i = 0; i < _players.size(); ++i) {
+				auto& lead = *_players[i];
+				if (lead.stopping || !lead.media || lead.kind != SourceKind::kVideo) {
+					continue;
+				}
+				bool first = true;
+				for (std::size_t k = 0; k < i; ++k) {
+					auto& o = *_players[k];
+					if (!o.stopping && o.media && SameVideo(o.file, lead.file)) {
+						first = false;
+						break;
+					}
+				}
+				if (!first) {
+					continue;
+				}
+				const auto leadClock = lead.media->Clock();
+				for (std::size_t k = i + 1; k < _players.size(); ++k) {
+					auto& f = *_players[k];
+					if (f.stopping || !f.media || !SameVideo(f.file, lead.file) || f.seekDelta.load() != 0) {
+						continue;
+					}
+					f.userPaused = lead.userPaused.load();
+					const auto off = leadClock - f.media->Clock();
+					if (std::abs(off) > 15'000'000) {
+						f.seekDelta = off;
+						log::info("{}: back in step with {}", f.name, lead.name);
+					}
+				}
+			}
 		}
 
 		// screens that turned off while you were away: back on, where they were, once you're close again
@@ -985,10 +1058,10 @@ namespace fv
 	{
 		if (auto ref = PickedRef(); ref && IsPlaying(ref.get())) {
 			Stop(ref.get());
-			Notify(std::format("Real Videos: stopped {}", Screen::RefName(ref.get())));
+			NotifyInfo(std::format("Real Videos: stopped {}", Screen::RefName(ref.get())));
 		} else {
 			StopAll();
-			Notify("Real Videos: stopped all screens");
+			NotifyInfo("Real Videos: stopped all screens");
 		}
 	}
 
@@ -1008,7 +1081,7 @@ namespace fv
 			return;
 		}
 		Screen::Dump(a_ref);
-		Notify(std::format("Real Videos: details of {} written to RealVideos.log", Screen::RefName(a_ref)));
+		NotifyInfo(std::format("Real Videos: details of {} written to RealVideos.log", Screen::RefName(a_ref)));
 	}
 
 	RE::NiPointer<RE::TESObjectREFR> Manager::Target()
@@ -1032,7 +1105,14 @@ namespace fv
 			for (auto& p : _players) {
 				if (Is(*p, a_ref->GetFormID()) && !p->stopping) {
 					p->userPaused = !p->userPaused;
-					Notify(std::format("Real Videos: {} {}", p->userPaused ? "paused" : "playing", p->name));
+					if (Settings::Get().syncSameVideo) {  // screens in step pause together
+						for (auto& o : _players) {
+							if (o.get() != p.get() && !o->stopping && SameVideo(o->file, p->file)) {
+								o->userPaused = p->userPaused.load();
+							}
+						}
+					}
+					NotifyInfo(std::format("Real Videos: {} {}", p->userPaused ? "paused" : "playing", p->name));
 					return;
 				}
 			}
@@ -1104,7 +1184,7 @@ namespace fv
 		}
 		if (IsPlaying(a_ref)) {
 			Stop(a_ref);
-			Notify(std::format("Real Videos: {} off", Screen::RefName(a_ref)));
+			NotifyInfo(std::format("Real Videos: {} off", Screen::RefName(a_ref)));
 		} else {
 			RemoteStep(a_ref, 0);
 		}
@@ -1113,11 +1193,124 @@ namespace fv
 	void Manager::RemoteSeek(std::uint32_t a_formID, float a_seconds)
 	{
 		std::scoped_lock lock(_lock);
+		std::wstring file;
 		for (auto& p : _players) {
 			if (Is(*p, a_formID) && !p->stopping) {
 				p->seekDelta += static_cast<std::int64_t>(a_seconds * 10'000'000.0f);
+				file = p->file;
 			}
 		}
+		if (Settings::Get().syncSameVideo && !file.empty()) {  // screens in step move together
+			for (auto& p : _players) {
+				if (!Is(*p, a_formID) && !p->stopping && SameVideo(p->file, file)) {
+					p->seekDelta += static_cast<std::int64_t>(a_seconds * 10'000'000.0f);
+				}
+			}
+		}
+	}
+
+	void Manager::RemoteSeekTo(std::uint32_t a_formID, float a_seconds)
+	{
+		std::scoped_lock lock(_lock);
+		for (auto& p : _players) {
+			if (Is(*p, a_formID) && !p->stopping && p->media) {
+				const auto target = static_cast<std::int64_t>(std::max(0.0f, a_seconds) * 10'000'000.0f);
+				p->seekDelta = target - p->media->Clock();
+				if (Settings::Get().syncSameVideo) {  // screens in step move together
+					for (auto& o : _players) {
+						if (o.get() != p.get() && !o->stopping && o->media && SameVideo(o->file, p->file)) {
+							o->seekDelta = target - o->media->Clock();
+						}
+					}
+				}
+				return;
+			}
+		}
+	}
+
+	namespace
+	{
+		RE::NiPoint3 PlayerPos()
+		{
+			auto* pc = RE::PlayerCharacter::GetSingleton();
+			return pc ? pc->GetPosition() : RE::NiPoint3{};
+		}
+	}
+
+	void Manager::AllScreens(RE::TESObjectREFR* a_from, bool a_on)
+	{
+		const auto& settings = Settings::Get();
+		const auto  center = PlayerPos();
+		if (!a_on) {
+			int stopped = 0;
+			{
+				std::scoped_lock lock(_lock);
+				for (auto& p : _players) {
+					auto ref = p->ref.get();
+					auto* g = p->binding.bound ? p->binding.geometry.get() : nullptr;
+					const auto where = g ? g->worldBound.center : ref ? ref->GetPosition() : center;
+					if (!p->stopping && where.GetDistance(center) <= settings.allRadius) {
+						StopLocked(*p);
+						++stopped;
+					}
+				}
+				_sleepers.clear();
+			}
+			NotifyInfo(std::format("Real Videos: {} screen{} here off", stopped, stopped == 1 ? "" : "s"));
+			return;
+		}
+
+		// the video on the screen you're aiming at, else the first one
+		std::wstring file;
+		{
+			std::scoped_lock lock(_lock);
+			for (auto& p : _players) {
+				if (a_from && Is(*p, a_from->GetFormID()) && !p->stopping && p->kind == SourceKind::kVideo) {
+					file = p->file;
+				}
+			}
+		}
+		if (file.empty()) {
+			const auto videos = ListVideos();
+			if (videos.empty()) {
+				Notify(std::format("Real Videos: no videos in {}", Narrow(settings.videoFolder)));
+				return;
+			}
+			file = ResolveVideoPath(videos.front());
+		}
+		int started = 0;
+		for (auto& ref : Screen::FindNearby(center, settings.allRadius)) {
+			if (IsPlaying(ref.get())) {
+				continue;
+			}
+			{
+				std::scoped_lock lock(_lock);
+				if (FreeSlot() < 0) {
+					Notify("Real Videos: all screen slots are busy (raise 'Screens playing at once')");
+					break;
+				}
+			}
+			if (Start(ref.get(), SourceKind::kVideo, file, settings.loop, 0, true)) {
+				++started;
+			}
+		}
+		NotifyInfo(std::format("Real Videos: {} screen{} here on", started, started == 1 ? "" : "s"));
+	}
+
+	void Manager::AllScreensToggle(RE::TESObjectREFR* a_from)
+	{
+		const auto center = PlayerPos();
+		bool       any = false;
+		{
+			std::scoped_lock lock(_lock);
+			for (auto& p : _players) {
+				auto ref = p->ref.get();
+				if (!p->stopping && ref && ref->GetPosition().GetDistance(center) <= Settings::Get().allRadius) {
+					any = true;
+				}
+			}
+		}
+		AllScreens(a_from, !any);
 	}
 
 	void Manager::RebindAll()
@@ -1223,6 +1416,10 @@ namespace fv
 				v.playing = true;
 				v.paused = p->userPaused;
 				v.brightenable = p->brightenable;
+				if (p->media) {
+					v.duration = static_cast<float>(p->media->Duration() / 1e7);
+					v.position = std::clamp(static_cast<float>(p->media->Clock() / 1e7), 0.0f, std::max(v.duration, 0.0f));
+				}
 				v.testPattern = p->kind == SourceKind::kTestPattern;
 				v.file = Narrow(std::filesystem::path(p->file).filename().wstring());
 			}
@@ -1474,6 +1671,7 @@ namespace fv
 				}
 				p.media->SetPaused(held);
 				p.media->SetVolume(p.volume);
+				p.media->SetPan(p.pan.load());
 				// frozen (far / out of view): no frames taken, so the decoder idles once its few frames are queued;
 				// coming back, the picture jumps to where the sound is
 				const bool frozen = p.frozen.load();

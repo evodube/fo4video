@@ -125,5 +125,7 @@ namespace fv
 
 		// The nearest supported screen (see IsSupported) under the crosshair, within a_maxDistance. Main thread.
 		RE::TESObjectREFR* PickAimed(float a_maxDistance);
+		// Every supported screen with its 3D loaded within a_radius of a_center (nearest first). Main thread.
+		std::vector<RE::NiPointer<RE::TESObjectREFR>> FindNearby(const RE::NiPoint3& a_center, float a_radius);
 	}
 }

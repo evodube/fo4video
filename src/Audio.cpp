@@ -37,7 +37,10 @@ namespace fv
 			return false;
 		}
 
-		log::info("audio engine ready (XAudio2)");
+		XAUDIO2_VOICE_DETAILS details{};
+		_master->GetVoiceDetails(&details);
+		_outChannels = std::max<std::uint32_t>(1, details.InputChannels);
+		log::info("audio engine ready (XAudio2, {} speaker channels)", _outChannels);
 		return true;
 	}
 
@@ -60,6 +63,7 @@ namespace fv
 			return false;
 		}
 		_sampleRate = a_format.nSamplesPerSec;
+		_channels = a_format.nChannels;
 		return true;
 	}
 
@@ -148,6 +152,43 @@ namespace fv
 			_voice->SetVolume(a_volume);
 			_lastVolume = a_volume;
 		}
+	}
+
+	void AudioStream::SetPan(float a_pan)
+	{
+		auto& engine = AudioEngine::Get();
+		const std::uint32_t outCh = engine.OutputChannels();
+		if (!_voice || !engine.Master() || outCh < 2 || _channels == 0 || std::abs(a_pan - _lastPan) < 0.02f) {
+			return;
+		}
+		_lastPan = a_pan;
+		a_pan = std::clamp(a_pan, -1.0f, 1.0f);
+		// the far ear keeps some sound (a screen to your right is still heard on the left, just quieter)
+		const float gl = a_pan > 0.0f ? 1.0f - 0.75f * a_pan : 1.0f;
+		const float gr = a_pan < 0.0f ? 1.0f + 0.75f * a_pan : 1.0f;
+		// source channels -> front left / right of the speakers (5.1 sources are folded down to stereo)
+		std::vector<float> m(static_cast<std::size_t>(_channels) * outCh, 0.0f);
+		auto set = [&](std::uint32_t a_src, float a_l, float a_r) {
+			m[0 * _channels + a_src] += a_l * gl;  // matrix is [destination][source]
+			m[1 * _channels + a_src] += a_r * gr;
+		};
+		if (_channels == 1) {
+			set(0, 1.0f, 1.0f);
+		} else if (_channels == 2) {
+			set(0, 1.0f, 0.0f);
+			set(1, 0.0f, 1.0f);
+		} else {
+			// FL FR FC LFE BL BR (SL SR)
+			set(0, 1.0f, 0.0f);
+			set(1, 0.0f, 1.0f);
+			if (_channels > 2) set(2, 0.707f, 0.707f);
+			if (_channels > 3) set(3, 0.5f, 0.5f);
+			if (_channels > 4) set(4, 0.707f, 0.0f);
+			if (_channels > 5) set(5, 0.0f, 0.707f);
+			if (_channels > 6) set(6, 0.707f, 0.0f);
+			if (_channels > 7) set(7, 0.0f, 0.707f);
+		}
+		_voice->SetOutputMatrix(engine.Master(), _channels, outCh, m.data());
 	}
 
 	void AudioStream::OnBufferEnd(void* a_context) noexcept

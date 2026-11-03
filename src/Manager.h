@@ -65,6 +65,7 @@ namespace fv
 		std::atomic<bool>  srgb{ false };
 		std::atomic<float> screenAspect{ 0.0f };
 		std::atomic<float> volume{ 0.0f };
+		std::atomic<float> pan{ 0.0f };  // -1 left .. +1 right
 		float              userVolume{ 1.0f };
 		std::atomic<bool>  stopping{ false };
 		std::atomic<bool>  userPaused{ false };  // paused from the remote
@@ -107,6 +108,8 @@ namespace fv
 		bool          muted{ false };
 		float         brightness{ 1.0f };
 		bool          brightenable{ false };
+		float         position{ 0.0f };  // seconds
+		float         duration{ 0.0f };  // seconds, 0 = unknown (test pattern)
 	};
 
 	class Manager
@@ -122,6 +125,11 @@ namespace fv
 		void RemoteFirst(RE::TESObjectREFR* a_ref);                  // home: first video of the folder
 		void RemotePower(RE::TESObjectREFR* a_ref);                  // off if playing, else on
 		void RemoteSeek(std::uint32_t a_formID, float a_seconds);    // any thread
+		void RemoteSeekTo(std::uint32_t a_formID, float a_seconds);  // any thread: jump to this time
+		// every TV / projector / cinema screen around you (this settlement): on = the video playing on a_from
+		// (or the first video), all in step; off = all stopped. Toggle: off if any is playing, else on. Main thread.
+		void AllScreens(RE::TESObjectREFR* a_from, bool a_on);
+		void AllScreensToggle(RE::TESObjectREFR* a_from);
 		void RebindAll();                                            // main thread: re-fit every playing screen (after settings changes)
 		void RemoteSetVolume(std::uint32_t a_formID, float a_volume);  // any thread
 		void RemoteSetMuted(std::uint32_t a_formID, bool a_muted);     // any thread

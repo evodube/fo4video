@@ -50,6 +50,7 @@ namespace fv
 		std::int64_t Clock() const;
 		void         SetPaused(bool a_paused);
 		void         SetVolume(float a_volume);
+		void         SetPan(float a_pan);
 
 		// Moves the newest frame with pts <= clock into a_out. Returns false if nothing new.
 		bool AcquireFrame(std::int64_t a_clock, VideoFrame& a_out);

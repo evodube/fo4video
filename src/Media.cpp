@@ -464,6 +464,13 @@ namespace fv
 		}
 	}
 
+	void MediaSource::SetPan(float a_pan)
+	{
+		if (_audio) {
+			_audio->SetPan(a_pan);
+		}
+	}
+
 	bool MediaSource::AcquireFrame(std::int64_t a_clock, VideoFrame& a_out)
 	{
 		bool got = false;

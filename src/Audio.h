@@ -11,11 +11,14 @@ namespace fv
 		bool        EnsureInit();
 		IXAudio2*   XAudio() const { return _xaudio.Get(); }
 		bool        Ready() const { return _master != nullptr; }
+		IXAudio2MasteringVoice* Master() const { return _master; }
+		std::uint32_t OutputChannels() const { return _outChannels; }
 
 	private:
 		ComPtr<IXAudio2>        _xaudio;
 		IXAudio2MasteringVoice* _master{ nullptr };
 		bool                    _tried{ false };
+		std::uint32_t           _outChannels{ 2 };
 		std::mutex              _lock;
 	};
 
@@ -42,6 +45,8 @@ namespace fv
 		void Pause();
 		void Flush();
 		void SetVolume(float a_volume);
+		// -1 = all left, 0 = centre, +1 = all right (where the screen is, seen from the camera)
+		void SetPan(float a_pan);
 		bool Valid() const { return _voice != nullptr; }
 
 		// IXAudio2VoiceCallback
@@ -58,5 +63,7 @@ namespace fv
 		std::uint32_t        _sampleRate{ 0 };
 		bool                 _running{ false };
 		float                _lastVolume{ -1.0f };
+		std::uint32_t        _channels{ 0 };
+		float                _lastPan{ 9.0f };
 	};
 }

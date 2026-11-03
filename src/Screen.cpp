@@ -938,6 +938,26 @@ namespace fv::Screen
 		return nullptr;
 	}
 
+	std::vector<RE::NiPointer<RE::TESObjectREFR>> FindNearby(const RE::NiPoint3& a_center, float a_radius)
+	{
+		std::vector<std::pair<float, RE::NiPointer<RE::TESObjectREFR>>> found;
+		ForEachLoadedCell([&](RE::TESObjectCELL* a_cell) {
+			a_cell->ForEachReferenceInRange(a_center, a_radius, [&](RE::TESObjectREFR* a_ref) {
+				if (a_ref && !a_ref->IsActor() && !a_ref->IsDisabled() && !a_ref->IsDeleted() && a_ref->Get3D() &&
+					std::ranges::none_of(found, [&](const auto& f) { return f.second.get() == a_ref; }) && IsSupported(a_ref)) {
+					found.emplace_back(a_ref->GetPosition().GetDistance(a_center), RE::NiPointer<RE::TESObjectREFR>(a_ref));
+				}
+				return RE::BSContainer::ForEachResult::kContinue;
+			});
+		});
+		std::ranges::sort(found, {}, &std::pair<float, RE::NiPointer<RE::TESObjectREFR>>::first);
+		std::vector<RE::NiPointer<RE::TESObjectREFR>> out;
+		for (auto& f : found) {
+			out.push_back(std::move(f.second));
+		}
+		return out;
+	}
+
 	bool IsPlaceholderTexture(RE::NiTexture* a_tex)
 	{
 		if (!a_tex || !a_tex->rendererTexture) {

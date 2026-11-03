@@ -77,6 +77,12 @@ namespace fv::Remote
 			}
 		}
 
+		std::string Clock(float a_seconds)
+		{
+			const int t = static_cast<int>(std::max(0.0f, a_seconds));
+			return t >= 3600 ? std::format("{}:{:02}:{:02}", t / 3600, (t / 60) % 60, t % 60) : std::format("{}:{:02}", t / 60, t % 60);
+		}
+
 		// One screen's controls (shared by the remote window and the "Now playing" page).
 		void Controls(std::uint32_t a_formID, bool a_withPicker)
 		{
@@ -117,7 +123,22 @@ namespace fv::Remote
 			if (Checkbox("Mute", &muted)) {
 				Manager::Get().RemoteSetMuted(a_formID, muted);
 			}
-			if (v.brightenable) {
+			if (v.playing && v.duration > 0.0f) {
+				// while dragging only the slider moves; the video jumps when you let go
+				static float dragging = -1.0f;
+				float        at = dragging >= 0.0f ? dragging : v.position;
+				const auto   label = std::format("{} / {}", Clock(at), Clock(v.duration));
+				if (SliderFloat("Position", &at, 0.0f, v.duration, label.c_str())) {
+					dragging = at;
+				}
+				if (IsItemDeactivatedAfterEdit() && dragging >= 0.0f) {
+					Manager::Get().RemoteSeekTo(a_formID, dragging);
+				}
+				if (!IsItemActive()) {
+					dragging = -1.0f;
+				}
+			}
+						if (v.brightenable) {
 				float bright = v.brightness * 100.0f;
 				if (SliderFloat("Brightness", &bright, 25.0f, 100.0f, "%.0f%%")) {
 					Manager::Get().RemoteSetBrightness(a_formID, bright / 100.0f);
@@ -136,33 +157,33 @@ namespace fv::Remote
 					EndCombo();
 				}
 
-				// what the F7 / F8 keys used to do
-				if (v.playing && TreeNode("Fix this screen")) {
-					if (Button("Next mesh")) {
-						Post(a_formID, [](RE::TESObjectREFR* a_ref) { Manager::Get().FixScreen(a_ref, 0); });
-					}
-					Tip("The video is on the wrong part of the object: try the next one.");
-					SameLine();
-					if (Button("Nearby screen")) {
-						Post(a_formID, [](RE::TESObjectREFR* a_ref) { Manager::Get().FixScreen(a_ref, 2); });
-					}
-					Tip("Show it on a screen next to this object instead (switches, projectors that light up a separate screen).");
-					if (Button("Turn / flip")) {
-						Post(a_formID, [](RE::TESObjectREFR* a_ref) { Manager::Get().FixScreen(a_ref, 1); });
-					}
-					Tip("Upside down, mirrored or sideways: each press tries the next way round. Remembered for this screen.");
-					SameLine();
-					if (Button("Other side")) {
-						Post(a_formID, [](RE::TESObjectREFR* a_ref) { Manager::Get().FixScreen(a_ref, 3); });
-					}
-					Tip("Two-sided screens: put the picture on the other side.");
-					SameLine();
-					if (Button("Write details to the log")) {
-						Post(a_formID, [](RE::TESObjectREFR* a_ref) { Manager::Get().DumpScreen(a_ref); });
-					}
-					Tip("For troubleshooting: what this screen is made of, into RealVideos.log.");
-					TreePop();
+			}
+			// what the F7 / F8 keys used to do
+			if (v.playing && TreeNode("Fix this screen")) {
+				if (Button("Next mesh")) {
+					Post(a_formID, [](RE::TESObjectREFR* a_ref) { Manager::Get().FixScreen(a_ref, 0); });
 				}
+				Tip("The video is on the wrong part of the object: try the next one.");
+				SameLine();
+				if (Button("Nearby screen")) {
+					Post(a_formID, [](RE::TESObjectREFR* a_ref) { Manager::Get().FixScreen(a_ref, 2); });
+				}
+				Tip("Show it on a screen next to this object instead (switches, projectors that light up a separate screen).");
+				if (Button("Turn / flip")) {
+					Post(a_formID, [](RE::TESObjectREFR* a_ref) { Manager::Get().FixScreen(a_ref, 1); });
+				}
+				Tip("Upside down, mirrored or sideways: each press tries the next way round. Remembered for this screen.");
+				SameLine();
+				if (Button("Other side")) {
+					Post(a_formID, [](RE::TESObjectREFR* a_ref) { Manager::Get().FixScreen(a_ref, 3); });
+				}
+				Tip("Two-sided screens: put the picture on the other side.");
+				SameLine();
+				if (Button("Write details to the log")) {
+					Post(a_formID, [](RE::TESObjectREFR* a_ref) { Manager::Get().DumpScreen(a_ref); });
+				}
+				Tip("For troubleshooting: what this screen is made of, into RealVideos.log.");
+				TreePop();
 			}
 			PopID();
 		}
@@ -199,7 +220,9 @@ namespace fv::Remote
 			kLock,
 			kResize,
 			kOpacity,
-			kBright
+			kBright,
+			kSeek,
+			kAll
 		};
 
 		bool g_listOpen = false;
@@ -268,7 +291,12 @@ namespace fv::Remote
 		} };
 		constexpr float kPadX = 562, kPadY = 655, kPadR = 352, kOkR = 133;
 		constexpr float kBarX0 = 83, kBarY0 = 1298, kBarX1 = 1023, kBarY1 = 1453;
+		// progress bar along the bottom of the name bar: click it to jump there
+		constexpr float kSeekX0 = kBarX0 + 30, kSeekX1 = kBarX1 - 30, kSeekY0 = 1416, kSeekY1 = 1432;
+
+
 		constexpr float kSunX = 1032, kSunY = 148, kSunR = 62;   // this screen's brightness, right of the top row
+		constexpr float kAllX = 93, kAllY = 148, kAllR = 62;     // every screen here on/off, left of the top row
 		constexpr std::array<float, 4> kBrightSteps{ 0.25f, 0.5f, 0.75f, 1.0f };
 
 		// next (+1) or previous (-1) brightness step; going up past 100% wraps round to 25%
@@ -308,6 +336,9 @@ namespace fv::Remote
 				}
 				return dy < 0 ? Key::kUp : Key::kDown;
 			}
+			if (a_x >= kSeekX0 - 10 && a_x <= kSeekX1 + 10 && a_y >= kSeekY0 - 18 && a_y <= kBarY1) {
+				return Key::kSeek;
+			}
 			if (a_x >= kBarX0 && a_x <= kBarX1 && a_y >= kBarY0 && a_y <= kBarY1) {
 				return Key::kName;
 			}
@@ -322,6 +353,9 @@ namespace fv::Remote
 			}
 			if ((a_x - kSunX) * (a_x - kSunX) + (a_y - kSunY) * (a_y - kSunY) <= kSunR * kSunR) {
 				return Key::kBright;
+			}
+			if ((a_x - kAllX) * (a_x - kAllX) + (a_y - kAllY) * (a_y - kAllY) <= kAllR * kAllR) {
+				return Key::kAll;
 			}
 			return Key::kNone;
 		}
@@ -417,7 +451,8 @@ namespace fv::Remote
 			ImDrawListManager::AddRectFilled(dl, c.P(kBarX0, kBarY0), c.P(kBarX1, kBarY1), a_hover == Key::kName ? kKeyHover : kKey, 0.0f, 0);
 			{
 				std::string text = a_label;
-				const float size = 64.0f * c.s;
+				const bool  timed = a_view.playing && a_view.duration > 0.0f;
+				const float size = (timed ? 52.0f : 64.0f) * c.s;
 				const float scale = size / std::max(1.0f, GetFontSize());
 				const float maxW = (kBarX1 - kBarX0 - 60) * c.s;
 				ImVec2      ts{};
@@ -427,8 +462,24 @@ namespace fv::Remote
 					text += "...";
 					CalcTextSize(&ts, text.c_str(), nullptr, false, -1.0f);
 				}
-				const auto mid = c.P((kBarX0 + kBarX1) * 0.5f, (kBarY0 + kBarY1) * 0.5f);
+				const auto mid = c.P((kBarX0 + kBarX1) * 0.5f, timed ? kBarY0 + 42.0f : (kBarY0 + kBarY1) * 0.5f);
 				ImDrawListManager::AddText(dl, GetFont(), size, ImVec2{ mid.x - ts.x * scale * 0.5f, mid.y - ts.y * scale * 0.5f }, kText, text.c_str());
+
+				if (timed) {
+					// 12:34 / 1:32:10 and the progress bar
+					const auto  t = std::format("{} / {}", Clock(a_view.position), Clock(a_view.duration));
+					const float tsize = 34.0f * c.s;
+					const float tscale = tsize / std::max(1.0f, GetFontSize());
+					ImVec2      tts{};
+					CalcTextSize(&tts, t.c_str(), nullptr, false, -1.0f);
+					const auto tmid = c.P((kBarX0 + kBarX1) * 0.5f, kBarY0 + 88.0f);
+					ImDrawListManager::AddText(dl, GetFont(), tsize, ImVec2{ tmid.x - tts.x * tscale * 0.5f, tmid.y - tts.y * tscale * 0.5f }, kIcon,
+						t.c_str());
+					const float f = std::clamp(a_view.position / a_view.duration, 0.0f, 1.0f);
+					ImDrawListManager::AddRectFilled(dl, c.P(kSeekX0, kSeekY0), c.P(kSeekX1, kSeekY1), IM_COL32(30, 30, 32, 255), 6.0f * c.s, 0);
+					ImDrawListManager::AddRectFilled(dl, c.P(kSeekX0, kSeekY0), c.P(kSeekX0 + (kSeekX1 - kSeekX0) * f, kSeekY1),
+						a_hover == Key::kSeek ? kText : kAccent, 6.0f * c.s, 0);
+				}
 			}
 
 			// lock (top left): closed = the remote stays put, open = drag it by any empty spot
@@ -450,6 +501,22 @@ namespace fv::Remote
 					const float o = 22.0f + i * 22.0f;
 					Line(c, kDesignW - 18, kDesignH - 18 - o, kDesignW - 18 - o, kDesignH - 18, 6, col);
 				}
+			}
+
+			// every screen here: a power sign with "ALL" under it
+			{
+				ImDrawListManager::AddCircleFilled(dl, c.P(kAllX, kAllY), kAllR * c.s, KeyColor(Key::kAll, a_hover, a_down), 40);
+				const float cy = kAllY - 10;
+				ImDrawListManager::PathArcTo(dl, c.P(kAllX, cy), 22 * c.s, -1.0f, 4.1416f, 24);
+				ImDrawListManager::PathStroke(dl, kIcon, 0, 5 * c.s);
+				Line(c, kAllX, cy - 30, kAllX, cy - 6, 5, kIcon);
+				const char* all = "ALL";
+				const float size = 26.0f * c.s;
+				const float scale = size / std::max(1.0f, GetFontSize());
+				ImVec2      ts{};
+				CalcTextSize(&ts, all, nullptr, false, -1.0f);
+				const auto at = c.P(kAllX, kAllY + 38);
+				ImDrawListManager::AddText(dl, GetFont(), size, ImVec2{ at.x - ts.x * scale * 0.5f, at.y - ts.y * scale * 0.5f }, kIcon, all);
 			}
 
 			// brightness of this screen: a little sun and the percentage (dim on TVs: they stay as they are)
@@ -518,6 +585,9 @@ namespace fv::Remote
 			case Key::kName:
 				g_listOpen = !g_listOpen;
 				g_scrollToCurrent = g_listOpen;
+				break;
+			case Key::kAll:
+				Post(a_target, [](RE::TESObjectREFR* a_ref) { Manager::Get().AllScreensToggle(a_ref); });
 				break;
 			case Key::kBright:
 				if (a_view.brightenable) {
@@ -599,6 +669,12 @@ namespace fv::Remote
 					} else if (hover == Key::kNone && !g_locked) {
 						g_dragging = true;  // grabbed an empty spot: move the remote
 						g_grab = ImVec2{ mouse.x - g_pos.x, mouse.y - g_pos.y };
+					} else if (hover == Key::kSeek) {
+						if (view.playing && view.duration > 0.0f) {
+							const float x = (mouse.x - origin.x) / scale;
+							const float f = std::clamp((x - kSeekX0) / (kSeekX1 - kSeekX0), 0.0f, 1.0f);
+							Manager::Get().RemoteSeekTo(target, f * view.duration);
+						}
 					} else {
 						Press(hover, target, view);
 					}
@@ -708,6 +784,11 @@ namespace fv::Remote
 			dirty |= Checkbox("Pause in menus (Esc, Pip-Boy, loading...)", &s.pauseInMenus);
 			dirty |= Checkbox("Pause when the game is in the background (alt-tab)", &s.pauseUnfocused);
 			dirty |= SliderInt("Screens playing at once", &s.maxScreens, 1, 16, "%d");
+			dirty |= Checkbox("Screens playing the same video stay in step", &s.syncSameVideo);
+			Tip("Same file name = same picture at the same moment on every screen; pausing or skipping one does all of them.");
+			dirty |= Checkbox("Show messages (playing, paused, off)", &s.showMessages);
+			Tip("Off: only problems are shown at the top left.");
+			dirty |= Meters("\"All screens here\" reaches", &s.allRadius, 400.0f, "How far around you the ALL button and the All screens buttons reach.");
 
 			SeparatorText("Performance");
 			{
@@ -811,6 +892,8 @@ namespace fv::Remote
 			SeparatorText("Sound");
 			dirty |= Checkbox("Sound on", &s.enableAudio);
 			Tip("Applies when a video starts.");
+			dirty |= Checkbox("Sound comes from the screen's direction", &s.directionalSound);
+			Tip("A screen on your left is louder in your left ear. Off: the same in both ears.");
 			dirty |= Percent("Master volume", &s.volume, 2.0f, "Every screen.");
 			dirty |= Percent("Volume a screen starts at", &s.startVolume, 2.0f, "What the remote's middle button starts at.");
 			TextWrapped("How far away you can hear a screen. Closer than the first distance it plays at full volume; walking "
@@ -918,6 +1001,19 @@ namespace fv::Remote
 		{
 			TextWrapped("Aim at a TV, projector or the drive-in screen and press the remote key (F6 by default) to control it. "
 						"Screens playing right now:");
+			if (Button("All screens here on")) {
+				if (auto* tasks = F4SE::GetTaskInterface()) {
+					tasks->AddTask([]() { Manager::Get().AllScreens(nullptr, true); });
+				}
+			}
+			Tip("Every TV, projector and cinema screen around you (this settlement) plays the first video, all in step. "
+				"The remote's ALL button plays the video on the screen you're aiming at.");
+			SameLine();
+			if (Button("All screens here off")) {
+				if (auto* tasks = F4SE::GetTaskInterface()) {
+					tasks->AddTask([]() { Manager::Get().AllScreens(nullptr, false); });
+				}
+			}
 			Separator();
 			const auto views = Manager::Get().Views();
 			if (views.empty()) {
