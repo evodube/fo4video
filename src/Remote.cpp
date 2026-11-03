@@ -705,15 +705,6 @@ namespace fv::Remote
 				ApplyNow();  // switch the screens playing now too
 			}
 			Tip("Stops what stands behind a screen (the drive-in's catwalk) from showing through the picture.");
-			if (Checkbox("Projectors: frame lit by the world (glow map, test)", &s.glowMap)) {
-				dirty = true;
-				ApplyNow();  // switch the screens playing now too
-			}
-			Tip("The screen keeps the game's lighting, so its frame reacts to light like the speakers; only the picture glows. "
-				"Switches the screens playing now right away; untick it if a projector looks wrong.");
-			dirty |= Percent("Projector frame light", &s.frameLight, 4.0f,
-				"Back, frame and pole of a playing projector screen follow the game's light (time of day, weather, indoors). "
-				"Higher = brighter, lower = darker.");
 			dirty |= Checkbox("Cinema: stretch to fill the screen", &s.bigScreenStretch);
 			dirty |= Percent("Cinema brightness", &s.bigScreenBrightness, 4.0f, "100% = as is, up to 400%. Only the drive-in screen. Applies right away.");
 			dirty |= Percent("Cinema VHS look", &s.bigScreenVHS, 1.0f, "Soft picture, colour bleed, faded colours, faint scanlines. 0% = off.");

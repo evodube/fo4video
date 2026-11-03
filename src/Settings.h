@@ -48,8 +48,8 @@ namespace fv
 		bool  selfLit{ true };               // projector & cinema screens glow like TVs (same brightness day/night, any direction)
 		bool  selfLitLatePass{ true };
 		bool  selfLitFaceOnly{ true };       // only the picture glows (a glowing copy over it); frame keeps normal lighting
-		bool  glowMap{ false };              // projectors: lit screen + glowing picture (glow map) instead of the glowing shader
-		float frameLight{ 1.0f };            // glowing projectors: back/frame/pole follow the world's light, times this
+		bool  glowMap{ true };               // projectors: lit screen + glowing picture (glow map) instead of the glowing shader
+		float frameLight{ 1.0f };            // fallback glow (no glow map possible): back/frame/pole follow the world's light
 		float bigScreenVHS{ 0.5f };          // big screens: VHS tape look, 0 = off, 1 = strong
 		float startVolume{ 0.5f };           // volume each screen starts at (the remote's middle button)
 		float bigMinDistance{ 1500.0f };
