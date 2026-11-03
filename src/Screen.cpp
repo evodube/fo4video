@@ -1532,81 +1532,6 @@ namespace fv::Screen
 		return true;
 	}
 
-	namespace
-	{
-		// Emit colours handed to the renderer; never freed, so a pointer the game still holds stays valid.
-		RE::NiColor* WhiteEmit()
-		{
-			static std::list<RE::NiColor> pool;
-			return &pool.emplace_back(1.0f, 1.0f, 1.0f);
-		}
-
-		// The screen's own emit settings, captured the first time we ever touch that property and never again,
-		// so a rebind (3D reloaded while waiting/sleeping) can't mistake our glow for the original.
-		struct EmitOriginal
-		{
-			RE::NiColor* color;
-			float        scale;
-			bool         ownEmit;
-		};
-		std::mutex                                                          g_emitLock;
-		std::unordered_map<const RE::BSLightingShaderProperty*, EmitOriginal> g_emitOriginals;
-		std::unordered_set<const RE::NiColor*>                             g_ourEmits;
-
-		void RestoreEmit(RE::BSLightingShaderProperty* a_prop)
-		{
-			std::scoped_lock lock(g_emitLock);
-			auto it = g_emitOriginals.find(a_prop);
-			if (it == g_emitOriginals.end()) {
-				return;
-			}
-			a_prop->emitColor = it->second.color;
-			a_prop->emitColorScale = it->second.scale;
-			a_prop->SetFlag(RE::BSShaderProperty::EShaderPropertyFlag::kOwnEmit, it->second.ownEmit);
-			RebuildRenderPasses(a_prop);
-		}
-	}
-
-	bool CanBacklight(const ScreenBinding& a_binding)
-	{
-		return a_binding.bound && !a_binding.isEffect && !a_binding.classic &&
-		       netimmerse_cast<RE::BSLightingShaderProperty*>(GetShaderProperty(a_binding.geometry.get())) != nullptr;
-	}
-
-	void SetBacklight(ScreenBinding& a_binding, int a_level)
-	{
-		a_level = std::clamp(a_level, 0, 3);
-		if (!CanBacklight(a_binding) || a_level == a_binding.backlightLevel) {
-			return;
-		}
-		auto* prop = netimmerse_cast<RE::BSLightingShaderProperty*>(GetShaderProperty(a_binding.geometry.get()));
-		using F = RE::BSShaderProperty::EShaderPropertyFlag;
-		{
-			std::scoped_lock lock(g_emitLock);
-			if (!g_emitOriginals.contains(prop) && !g_ourEmits.contains(prop->emitColor)) {
-				g_emitOriginals[prop] = { prop->emitColor, prop->emitColorScale, prop->flags.all(F::kOwnEmit) };
-			}
-		}
-		a_binding.backlightSaved = true;
-		if (a_level > 0) {
-			// the glow is added to the light falling on the screen: keep it gentle, daylight is added on top
-			static constexpr std::array<float, 4> kScale{ 0.0f, 0.12f, 0.25f, 0.4f };
-			auto* color = WhiteEmit();
-			{
-				std::scoped_lock lock(g_emitLock);
-				g_ourEmits.insert(color);
-			}
-			prop->emitColor = color;
-			prop->emitColorScale = kScale[static_cast<std::size_t>(a_level)];
-			prop->SetFlag(F::kOwnEmit, true);
-			RebuildRenderPasses(prop);
-		} else {
-			RestoreEmit(prop);
-		}
-		a_binding.backlightLevel = a_level;
-		log::info("'{}': backlight {}", a_binding.geometryName, a_level == 0 ? std::string("off") : std::format("level {}", a_level));
-	}
-
 	void Unbind(ScreenBinding& a_binding)
 	{
 		if (!a_binding.bound) {
@@ -1615,11 +1540,6 @@ namespace fv::Screen
 		}
 
 		auto* prop = GetShaderProperty(a_binding.geometry.get());
-		if (a_binding.backlightSaved) {
-			if (auto* lp = netimmerse_cast<RE::BSLightingShaderProperty*>(prop)) {
-				RestoreEmit(lp);  // even if the material changed under us: never leave our glow behind
-			}
-		}
 		if (prop && prop->material == a_binding.material && a_binding.material) {
 			auto* mat = a_binding.material;
 			for (int i = 0; i < 2; ++i) {

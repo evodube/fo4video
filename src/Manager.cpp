@@ -631,9 +631,6 @@ namespace fv
 			}
 
 			Screen::KeepOverlaysHidden(p->binding);
-			// backlight from the remote (applied here, on the main thread; a rebind starts at "off" again)
-			p->canBacklight = Screen::CanBacklight(p->binding);
-			Screen::SetBacklight(p->binding, _prefs[p->formID].backlight);
 
 			float volume = 0.0f;
 			if (p->binding.bound && player) {
@@ -861,13 +858,6 @@ namespace fv
 		Notify("Real Videos: settings applied to the playing screens");
 	}
 
-	void Manager::RemoteCycleBacklight(std::uint32_t a_formID)
-	{
-		std::scoped_lock lock(_lock);
-		auto& level = _prefs[a_formID].backlight;
-		level = (level + 1) % 4;
-	}
-
 	void Manager::RemoteSetVolume(std::uint32_t a_formID, float a_volume)
 	{
 		std::scoped_lock lock(_lock);
@@ -891,7 +881,6 @@ namespace fv
 				v.volume = it->second.volume;
 			}
 			v.muted = it->second.muted;
-			v.backlight = it->second.backlight;
 		}
 		for (auto& p : _players) {
 			if (p->formID == a_formID && !p->stopping) {
@@ -900,7 +889,6 @@ namespace fv
 				v.paused = p->userPaused;
 				v.testPattern = p->kind == SourceKind::kTestPattern;
 				v.file = Narrow(std::filesystem::path(p->file).filename().wstring());
-				v.canBacklight = p->canBacklight;
 			}
 		}
 		return v;

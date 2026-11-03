@@ -152,7 +152,6 @@ namespace fv::Remote
 			kName,
 			kClose,
 			kLock,
-			kBacklight,
 			kOpacity
 		};
 
@@ -219,8 +218,7 @@ namespace fv::Remote
 		} };
 		constexpr float kPadX = 562, kPadY = 655, kPadR = 352, kOkR = 133;
 		constexpr float kBarX0 = 83, kBarY0 = 1298, kBarX1 = 1023, kBarY1 = 1453;
-		constexpr float kLightX = 1032, kLightY = 148, kLightR = 62;  // backlight, right of the top row
-		constexpr float kFadeX = 93, kFadeY = 148;                     // opacity, left of the top row
+		constexpr float kFadeX = 93, kFadeY = 148, kFadeR = 62;  // opacity, left of the top row
 
 		Key HitTest(float a_x, float a_y)  // design units
 		{
@@ -248,10 +246,7 @@ namespace fv::Remote
 			if (a_x <= 90 && a_y <= 90) {
 				return Key::kLock;
 			}
-			if ((a_x - kLightX) * (a_x - kLightX) + (a_y - kLightY) * (a_y - kLightY) <= kLightR * kLightR) {
-				return Key::kBacklight;
-			}
-			if ((a_x - kFadeX) * (a_x - kFadeX) + (a_y - kFadeY) * (a_y - kFadeY) <= kLightR * kLightR) {
+			if ((a_x - kFadeX) * (a_x - kFadeX) + (a_y - kFadeY) * (a_y - kFadeY) <= kFadeR * kFadeR) {
 				return Key::kOpacity;
 			}
 			return Key::kNone;
@@ -374,28 +369,9 @@ namespace fv::Remote
 				Line(c, sx + 13, sy, sx + 13, 46.0f, 6, col);
 			}
 
-			// backlight: a small sun, its rays lit by level, three dots underneath
-			{
-				const bool  usable = a_view.canBacklight;
-				const ImU32 bg = !usable ? IM_COL32(35, 35, 37, 255) : KeyColor(Key::kBacklight, a_hover, a_down);
-				ImDrawListManager::AddCircleFilled(dl, c.P(kLightX, kLightY), kLightR * c.s, bg, 40);
-				const ImU32 lit = !usable ? IM_COL32(80, 80, 80, 255) : a_view.backlight > 0 ? IM_COL32(255, 205, 90, 255) : kIcon;
-				ImDrawListManager::AddCircleFilled(dl, c.P(kLightX, kLightY - 8), 13 * c.s, lit, 24);
-				for (int i = 0; i < 8; ++i) {
-					const float a = i * 0.7853982f;
-					const float ca = std::cos(a), sa = std::sin(a);
-					Line(c, kLightX + ca * 21, kLightY - 8 + sa * 21, kLightX + ca * 31, kLightY - 8 + sa * 31, 5, lit);
-				}
-				for (int i = 0; i < 3; ++i) {
-					const bool on = usable && a_view.backlight > i;
-					ImDrawListManager::AddCircleFilled(dl, c.P(kLightX - 16 + i * 16.0f, kLightY + 36), 5 * c.s,
-						on ? IM_COL32(255, 205, 90, 255) : IM_COL32(90, 90, 90, 255), 12);
-				}
-			}
-
 			// opacity: a half-filled circle, how see-through the remote is
 			{
-				ImDrawListManager::AddCircleFilled(dl, c.P(kFadeX, kFadeY), kLightR * c.s, KeyColor(Key::kOpacity, a_hover, a_down), 40);
+				ImDrawListManager::AddCircleFilled(dl, c.P(kFadeX, kFadeY), kFadeR * c.s, KeyColor(Key::kOpacity, a_hover, a_down), 40);
 				ImDrawListManager::AddCircle(dl, c.P(kFadeX, kFadeY - 6), 24 * c.s, kIcon, 32, 5 * c.s);
 				ImDrawListManager::PathArcTo(dl, c.P(kFadeX, kFadeY - 6), 24 * c.s, 1.5707963f, 4.712389f, 20);
 				ImDrawListManager::PathFillConvex(dl, kIcon);
@@ -472,11 +448,6 @@ namespace fv::Remote
 					}
 					g_opacity = kOpacitySteps[(i + 1) % kOpacitySteps.size()];
 					SaveState();
-				}
-				break;
-			case Key::kBacklight:
-				if (a_view.canBacklight) {
-					mgr.RemoteCycleBacklight(a_target);
 				}
 				break;
 			default:
