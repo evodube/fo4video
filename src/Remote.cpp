@@ -700,7 +700,6 @@ namespace fv::Remote
 			}
 			Tip("Same brightness day and night, whichever way the screen faces. Off: lit by the world (dark at night). "
 				"Switches the screens playing now right away.");
-			dirty |= Percent("Projector glow brightness", &s.selfLitBrightness, 4.0f, "100% = the video as is. Applies right away.");
 			if (Checkbox("Glowing screens: draw after the world", &s.selfLitLatePass)) {
 				dirty = true;
 				ApplyNow();  // switch the screens playing now too

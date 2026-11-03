@@ -1250,7 +1250,7 @@ namespace fv::Screen
 
 			a_prop->material = glowMat;  // the property's reference to the plain material is kept for Unbind
 			lit->emitColor = &white;
-			lit->emitColorScale = Settings::Get().selfLitBrightness;
+			lit->emitColorScale = 1.0f;
 			a_prop->SetFlag(F::kGlowMap, true);
 			a_prop->SetFlag(F::kOwnEmit, true);
 			RebuildRenderPasses(a_prop);
@@ -1278,10 +1278,9 @@ namespace fv::Screen
 			if (!em) {
 				return;
 			}
-			const auto& settings = Settings::Get();
 			em->baseTexture = RE::NiPointer<RE::NiTexture>(a_slotTexture);
 			em->baseColor = RE::NiColorA{ 1.0f, 1.0f, 1.0f, 1.0f };
-			em->baseColorScale = settings.selfLitBrightness;
+			em->baseColorScale = 1.0f;
 			for (int i = 0; i < 2; ++i) {
 				em->texCoordOffset[i] = a_litMat->texCoordOffset[i];
 				em->texCoordScale[i] = a_litMat->texCoordScale[i];

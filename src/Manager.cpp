@@ -1344,7 +1344,7 @@ namespace fv
 			const float screenBright = p.brightenable ? p.brightness.load() : 1.0f;
 			const bool  glowing = b.bound && b.selfLit;
 			if (glowing || (b.bound && b.glowMap)) {
-				Screen::SetGlow(b, b.bigScreen ? 1.0f : settings.selfLitBrightness);
+				Screen::SetGlow(b, 1.0f);
 			}
 			const float pictureBright = (b.bigScreen ? settings.bigScreenBrightness : 1.0f) * screenBright;
 			const float pictureFx[4]{ pictureBright, 0.0f, static_cast<float>(std::fmod(seconds, 3600.0)), 0.0f };

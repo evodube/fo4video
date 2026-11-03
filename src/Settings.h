@@ -46,7 +46,6 @@ namespace fv
 		bool  bigScreenStretch{ true };    // big screens: stretch the video to fill them (no black bars)
 		float bigScreenBrightness{ 1.15f };  // big screens (the drive-in): picture brightness
 		bool  selfLit{ true };               // projector & cinema screens glow like TVs (same brightness day/night, any direction)
-		float selfLitBrightness{ 1.0f };
 		bool  selfLitLatePass{ true };
 		bool  selfLitFaceOnly{ true };       // only the picture glows (a glowing copy over it); frame keeps normal lighting
 		bool  glowMap{ false };              // projectors: lit screen + glowing picture (glow map) instead of the glowing shader

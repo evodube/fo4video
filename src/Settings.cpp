@@ -114,7 +114,6 @@ namespace fv
 		put(L"Screen", L"bGlowPictureOnly", b(selfLitFaceOnly));
 		put(L"Screen", L"fFrameLight", f(frameLight));
 		put(L"Screen", L"bGlowMap", b(glowMap));
-		put(L"Screen", L"fSelfLitBrightness", f(selfLitBrightness));
 
 		put(L"Audio", L"bEnableAudio", b(enableAudio));
 		put(L"Audio", L"fVolume", f(volume));
@@ -171,7 +170,6 @@ namespace fv
 		bigScreenRadius = ReadFloat(L"Audio", L"fBigScreenSize", bigScreenRadius);
 		bigScreenStretch = ReadBool(L"Screen", L"bStretchOnBigScreens", bigScreenStretch);
 		selfLit = ReadBool(L"Screen", L"bSelfLitScreens", selfLit);
-		selfLitBrightness = std::clamp(ReadFloat(L"Screen", L"fSelfLitBrightness", selfLitBrightness), 0.0f, 4.0f);
 		selfLitLatePass = ReadBool(L"Screen", L"bSelfLitLatePass", selfLitLatePass);
 		selfLitFaceOnly = ReadBool(L"Screen", L"bGlowPictureOnly", selfLitFaceOnly);
 		frameLight = std::clamp(ReadFloat(L"Screen", L"fFrameLight", frameLight), 0.0f, 4.0f);
