@@ -29,7 +29,9 @@ namespace fv
 		void Stop();
 
 		// Restart from the beginning (used for looping).
-		void Restart();
+		void Restart() { RestartAt(0); }
+		// Jump to a position (100ns units, clamped to the file). Render thread, like Restart.
+		void Seek(std::int64_t a_position);
 
 		// Playback clock in 100ns units (audio-driven when there is audio).
 		std::int64_t Clock() const;
@@ -53,6 +55,7 @@ namespace fv
 		bool OpenAudio(const std::wstring& a_path);
 		bool UpdateVideoFormat();
 
+		void RestartAt(std::int64_t a_position);
 		void VideoThread();
 		void AudioThread();
 
@@ -86,6 +89,7 @@ namespace fv
 		steady_t::time_point _pauseStart{};
 		steady_t::duration   _pausedTotal{};
 		bool                _paused{ false };
+		std::int64_t        _clockOffset{ 0 };  // where the clock starts after a seek
 
 		// threads
 		std::atomic<bool> _stop{ false };

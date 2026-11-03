@@ -122,27 +122,327 @@ namespace fv::Remote
 			PopID();
 		}
 
+		// ---- the remote, drawn after the template: 1125 x 1500 design units, scaled to the screen ----
+
+		constexpr float kDesignW = 1125.0f;
+		constexpr float kDesignH = 1500.0f;
+
+		const ImU32 kBack = IM_COL32(21, 21, 23, 255);
+		const ImU32 kKey = IM_COL32(49, 49, 52, 255);
+		const ImU32 kKeyHover = IM_COL32(62, 62, 66, 255);
+		const ImU32 kKeyDown = IM_COL32(78, 78, 84, 255);
+		const ImU32 kIcon = IM_COL32(190, 190, 190, 255);
+		const ImU32 kText = IM_COL32(245, 245, 245, 255);
+		const ImU32 kAccent = IM_COL32(120, 200, 255, 255);
+
+		enum class Key
+		{
+			kNone,
+			kRewind,
+			kPlayPause,
+			kForward,
+			kUp,
+			kDown,
+			kLeft,
+			kRight,
+			kCenter,
+			kPower,
+			kHome,
+			kSearch,
+			kName,
+			kClose
+		};
+
+		bool g_listOpen = false;
+		bool g_scrollToCurrent = false;
+
+		struct Canvas
+		{
+			ImDrawList* dl;
+			ImVec2      origin;
+			float       s;  // design unit -> pixels
+
+			ImVec2 P(float a_x, float a_y) const { return ImVec2{ origin.x + a_x * s, origin.y + a_y * s }; }
+		};
+
+		struct Round
+		{
+			Key   key;
+			float x, y, r;
+		};
+		constexpr std::array<Round, 6> kRoundKeys{ {
+			{ Key::kRewind, 295, 148, 94 },
+			{ Key::kPlayPause, 562, 148, 94 },
+			{ Key::kForward, 830, 148, 94 },
+			{ Key::kPower, 293, 1158, 94 },
+			{ Key::kHome, 562, 1158, 94 },
+			{ Key::kSearch, 831, 1158, 94 },
+		} };
+		constexpr float kPadX = 562, kPadY = 655, kPadR = 352, kOkR = 133;
+		constexpr float kBarX0 = 83, kBarY0 = 1298, kBarX1 = 1023, kBarY1 = 1453;
+
+		Key HitTest(float a_x, float a_y)  // design units
+		{
+			for (const auto& k : kRoundKeys) {
+				if ((a_x - k.x) * (a_x - k.x) + (a_y - k.y) * (a_y - k.y) <= k.r * k.r) {
+					return k.key;
+				}
+			}
+			const float dx = a_x - kPadX, dy = a_y - kPadY, d = std::sqrt(dx * dx + dy * dy);
+			if (d <= kOkR) {
+				return Key::kCenter;
+			}
+			if (d <= kPadR) {
+				if (std::abs(dx) > std::abs(dy)) {
+					return dx < 0 ? Key::kLeft : Key::kRight;
+				}
+				return dy < 0 ? Key::kUp : Key::kDown;
+			}
+			if (a_x >= kBarX0 && a_x <= kBarX1 && a_y >= kBarY0 && a_y <= kBarY1) {
+				return Key::kName;
+			}
+			if (a_x >= kDesignW - 70 && a_y <= 70) {
+				return Key::kClose;
+			}
+			return Key::kNone;
+		}
+
+		ImU32 KeyColor(Key a_key, Key a_hover, bool a_down) { return a_key != a_hover ? kKey : a_down ? kKeyDown : kKeyHover; }
+
+		void Line(const Canvas& c, float x0, float y0, float x1, float y1, float w, ImU32 col)
+		{
+			ImDrawListManager::AddLine(c.dl, c.P(x0, y0), c.P(x1, y1), col, w * c.s);
+		}
+
+		void Tri(const Canvas& c, float x0, float y0, float x1, float y1, float x2, float y2, ImU32 col)
+		{
+			ImDrawListManager::AddTriangleFilled(c.dl, c.P(x0, y0), c.P(x1, y1), c.P(x2, y2), col);
+		}
+
+		void Chevron(const Canvas& c, float cx, float cy, float dx, float dy)  // tip points along (dx, dy)
+		{
+			const float len = 52, back = 28, w = 14;
+			const float tx = cx + dx * back * 0.5f, ty = cy + dy * back * 0.5f;      // tip
+			const float bx = cx - dx * back * 0.5f, by = cy - dy * back * 0.5f;      // back of the arms
+			const float px = -dy, py = dx;                                         // across
+			Line(c, bx + px * len, by + py * len, tx, ty, w, kIcon);
+			Line(c, bx - px * len, by - py * len, tx, ty, w, kIcon);
+		}
+
+		void DrawRemote(const Canvas& c, Key a_hover, bool a_down, const RemoteView& a_view, const std::string& a_label)
+		{
+			auto* dl = c.dl;
+			ImDrawListManager::AddRectFilled(dl, c.P(0, 0), c.P(kDesignW, kDesignH), kBack, 28.0f * c.s, 0);
+
+			for (const auto& k : kRoundKeys) {
+				ImDrawListManager::AddCircleFilled(dl, c.P(k.x, k.y), k.r * c.s, KeyColor(k.key, a_hover, a_down), 48);
+			}
+
+			// rewind / play-pause / fast forward
+			Tri(c, 252, 148, 290, 120, 290, 176, kIcon);
+			Tri(c, 286, 148, 324, 120, 324, 176, kIcon);
+			Tri(c, 527, 120, 527, 176, 558, 148, a_view.playing && !a_view.paused ? kAccent : kIcon);
+			ImDrawListManager::AddRectFilled(dl, c.P(568, 122), c.P(580, 174), kIcon, 3.0f * c.s, 0);
+			ImDrawListManager::AddRectFilled(dl, c.P(588, 122), c.P(600, 174), kIcon, 3.0f * c.s, 0);
+			Tri(c, 800, 120, 800, 176, 838, 148, kIcon);
+			Tri(c, 834, 120, 834, 176, 872, 148, kIcon);
+
+			// direction pad: four wedges split by dark gaps, round OK key in the middle
+			const auto padHover = a_hover == Key::kUp || a_hover == Key::kDown || a_hover == Key::kLeft || a_hover == Key::kRight;
+			ImDrawListManager::AddCircleFilled(dl, c.P(kPadX, kPadY), kPadR * c.s, kKey, 96);
+			if (padHover) {
+				// light up only the hovered quarter
+				const float mid = a_hover == Key::kRight ? 0.0f : a_hover == Key::kDown ? 1.5707963f : a_hover == Key::kLeft ? 3.1415926f : -1.5707963f;
+				ImDrawListManager::PathLineTo(dl, c.P(kPadX, kPadY));
+				ImDrawListManager::PathArcTo(dl, c.P(kPadX, kPadY), kPadR * c.s, mid - 0.785398f, mid + 0.785398f, 32);
+				ImDrawListManager::PathFillConvex(dl, a_down ? kKeyDown : kKeyHover);
+			}
+			const float g = 12;
+			const float d = kPadR * 0.7071f;
+			Line(c, kPadX - d, kPadY - d, kPadX + d, kPadY + d, g, kBack);
+			Line(c, kPadX + d, kPadY - d, kPadX - d, kPadY + d, g, kBack);
+			ImDrawListManager::AddCircleFilled(dl, c.P(kPadX, kPadY), (kOkR + 10) * c.s, kBack, 64);
+			ImDrawListManager::AddCircleFilled(dl, c.P(kPadX, kPadY), kOkR * c.s, KeyColor(Key::kCenter, a_hover, a_down), 64);
+			Chevron(c, kPadX, kPadY - 250, 0, -1);
+			Chevron(c, kPadX, kPadY + 250, 0, 1);
+			Chevron(c, kPadX - 250, kPadY, -1, 0);
+			Chevron(c, kPadX + 250, kPadY, 1, 0);
+
+			// OK key: volume (click = mute)
+			{
+				const auto text = a_view.muted ? std::string("MUTE") : std::format("{:.0f}%", a_view.volume * 100.0f);
+				const float size = 54.0f * c.s;
+				ImVec2      ts{};
+				CalcTextSize(&ts, text.c_str(), nullptr, false, -1.0f);
+				const float scale = size / std::max(1.0f, GetFontSize());
+				const auto  at = c.P(kPadX, kPadY);
+				ImDrawListManager::AddText(dl, GetFont(), size, ImVec2{ at.x - ts.x * scale * 0.5f, at.y - ts.y * scale * 0.5f },
+					a_view.muted ? IM_COL32(255, 120, 110, 255) : kIcon, text.c_str());
+			}
+
+			// power: open ring + bar
+			ImDrawListManager::PathArcTo(dl, c.P(293, 1162), 36 * c.s, -1.5707963f + 0.75f, -1.5707963f + 6.2831853f - 0.75f, 40);
+			ImDrawListManager::PathStroke(dl, a_view.playing ? kIcon : IM_COL32(255, 120, 110, 255), 0, 9 * c.s);
+			Line(c, 293, 1112, 293, 1158, 9, a_view.playing ? kIcon : IM_COL32(255, 120, 110, 255));
+
+			// home
+			Tri(c, 562, 1118, 522, 1158, 602, 1158, kIcon);
+			ImDrawListManager::AddRectFilled(dl, c.P(530, 1154), c.P(594, 1196), kIcon, 3.0f * c.s, 0);
+			ImDrawListManager::AddRectFilled(dl, c.P(552, 1170), c.P(572, 1196), KeyColor(Key::kHome, a_hover, a_down), 0.0f, 0);
+
+			// search
+			ImDrawListManager::AddCircle(dl, c.P(822, 1150), 30 * c.s, g_listOpen ? kAccent : kIcon, 40, 8 * c.s);
+			Line(c, 844, 1172, 870, 1198, 9, g_listOpen ? kAccent : kIcon);
+
+			// name bar
+			ImDrawListManager::AddRectFilled(dl, c.P(kBarX0, kBarY0), c.P(kBarX1, kBarY1), a_hover == Key::kName ? kKeyHover : kKey, 0.0f, 0);
+			{
+				std::string text = a_label;
+				const float size = 64.0f * c.s;
+				const float scale = size / std::max(1.0f, GetFontSize());
+				const float maxW = (kBarX1 - kBarX0 - 60) * c.s;
+				ImVec2      ts{};
+				CalcTextSize(&ts, text.c_str(), nullptr, false, -1.0f);
+				while (text.size() > 4 && ts.x * scale > maxW) {
+					text.resize(text.size() - 4);
+					text += "...";
+					CalcTextSize(&ts, text.c_str(), nullptr, false, -1.0f);
+				}
+				const auto mid = c.P((kBarX0 + kBarX1) * 0.5f, (kBarY0 + kBarY1) * 0.5f);
+				ImDrawListManager::AddText(dl, GetFont(), size, ImVec2{ mid.x - ts.x * scale * 0.5f, mid.y - ts.y * scale * 0.5f }, kText, text.c_str());
+			}
+
+			// small close mark
+			Line(c, kDesignW - 52, 22, kDesignW - 22, 52, 6, a_hover == Key::kClose ? kText : IM_COL32(110, 110, 110, 255));
+			Line(c, kDesignW - 22, 22, kDesignW - 52, 52, 6, a_hover == Key::kClose ? kText : IM_COL32(110, 110, 110, 255));
+		}
+
+		void Press(Key a_key, std::uint32_t a_target, const RemoteView& a_view)
+		{
+			auto& mgr = Manager::Get();
+			switch (a_key) {
+			case Key::kRewind:
+				mgr.RemoteSeek(a_target, -10.0f);
+				break;
+			case Key::kForward:
+				mgr.RemoteSeek(a_target, +10.0f);
+				break;
+			case Key::kPlayPause:
+				Post(a_target, [](RE::TESObjectREFR* a_ref) { Manager::Get().RemotePlayPause(a_ref); });
+				break;
+			case Key::kUp:
+				mgr.RemoteSetVolume(a_target, std::min(2.0f, std::round((a_view.volume + 0.1f) * 10.0f) / 10.0f));
+				if (a_view.muted) {
+					mgr.RemoteSetMuted(a_target, false);
+				}
+				break;
+			case Key::kDown:
+				mgr.RemoteSetVolume(a_target, std::max(0.0f, std::round((a_view.volume - 0.1f) * 10.0f) / 10.0f));
+				break;
+			case Key::kLeft:
+				Post(a_target, [](RE::TESObjectREFR* a_ref) { Manager::Get().RemoteStep(a_ref, -1); });
+				break;
+			case Key::kRight:
+				Post(a_target, [](RE::TESObjectREFR* a_ref) { Manager::Get().RemoteStep(a_ref, +1); });
+				break;
+			case Key::kCenter:
+				mgr.RemoteSetMuted(a_target, !a_view.muted);
+				break;
+			case Key::kPower:
+				Post(a_target, [](RE::TESObjectREFR* a_ref) { Manager::Get().RemotePower(a_ref); });
+				break;
+			case Key::kHome:
+				Post(a_target, [](RE::TESObjectREFR* a_ref) { Manager::Get().RemoteFirst(a_ref); });
+				break;
+			case Key::kSearch:
+			case Key::kName:
+				g_listOpen = !g_listOpen;
+				g_scrollToCurrent = g_listOpen;
+				break;
+			case Key::kClose:
+				if (g_window) {
+					g_window->IsOpen = false;
+				}
+				break;
+			default:
+				break;
+			}
+		}
+
 		void __stdcall RenderWindow()
 		{
 			const auto target = g_target.load();
+			const auto view = Manager::Get().View(target);
 			auto*      viewport = GetMainViewport();
-			SetNextWindowPos(ImVec2{ viewport->Pos.x + viewport->Size.x * 0.5f, viewport->Pos.y + viewport->Size.y * 0.72f }, ImGuiCond_Appearing,
+			const float scale = viewport->Size.y * 0.5f / kDesignH;
+			const float w = kDesignW * scale, h = kDesignH * scale;
+
+			SetNextWindowPos(ImVec2{ viewport->Pos.x + viewport->Size.x * 0.80f, viewport->Pos.y + viewport->Size.y * 0.5f }, ImGuiCond_Appearing,
 				ImVec2{ 0.5f, 0.5f });
+			PushStyleColor(ImGuiCol_WindowBg, kBack);
+			PushStyleColor(ImGuiCol_ChildBg, kKey);
+			PushStyleColor(ImGuiCol_Border, kBack);
+			PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{ 0.0f, 0.0f });
+			PushStyleVar(ImGuiStyleVar_WindowRounding, 14.0f * scale * 2.0f);
 
 			bool open = true;
-			if (Begin("Real Videos Remote##RealVideos", &open, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize)) {
+			if (Begin("##RealVideosRemote", nullptr,
+					ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoScrollbar |
+						ImGuiWindowFlags_NoCollapse)) {
+				ImVec2 origin{};
+				GetCursorScreenPos(&origin);
+				InvisibleButton("##remote", ImVec2{ w, h });
+				const bool hovered = IsItemHovered();
+				const bool down = IsItemActive();
+				ImVec2     mouse{};
+				GetMousePos(&mouse);
+				const Key hover = hovered ? HitTest((mouse.x - origin.x) / scale, (mouse.y - origin.y) / scale) : Key::kNone;
+
+				std::string label;
 				{
 					std::scoped_lock lock(g_lock);
-					Text("%s", g_targetName.c_str());
+					label = !view.playing ? "POWER OFF" : view.testPattern ? "TEST PATTERN" : view.file;
 				}
-				Separator();
-				Controls(target, true);
-				Separator();
-				if (Button("Close") || IsKeyPressed(ImGuiKey_Escape, false)) {
+				DrawRemote(Canvas{ GetWindowDrawList(), origin, scale }, hover, down, view, label);
+				if (hovered && IsItemClicked(0)) {
+					Press(hover, target, view);
+				}
+
+				// the video list under the name bar (search key / click the name): scroll and pick
+				if (g_listOpen) {
+					std::scoped_lock lock(g_lock);
+					SetCursorScreenPos(ImVec2{ origin.x + kBarX0 * scale, origin.y + h + 6.0f });
+					const float rows = static_cast<float>(std::min<std::size_t>(g_videoNames.size(), 10));
+					const float listH = std::max(1.0f, rows) * (GetFontSize() + 8.0f) + 12.0f;
+					if (BeginChild("##RealVideosList", ImVec2{ (kBarX1 - kBarX0) * scale, listH }, 0, 0)) {
+						if (g_videoNames.empty()) {
+							TextDisabled("No videos in the video folder");
+						}
+						for (std::size_t i = 0; i < g_videoNames.size(); ++i) {
+							const bool current = view.playing && !view.testPattern &&
+							                     _stricmp(Narrow(std::filesystem::path(g_videoFiles[i]).filename().wstring()).c_str(), view.file.c_str()) == 0;
+							PushID(static_cast<int>(i));
+							if (Selectable(g_videoNames[i].c_str(), current)) {
+								Post(target, [file = g_videoFiles[i]](RE::TESObjectREFR* a_ref) { Manager::Get().RemotePlayFile(a_ref, file); });
+							}
+							PopID();
+							if (current && g_scrollToCurrent) {
+								SetScrollHereY(0.5f);
+								g_scrollToCurrent = false;
+							}
+						}
+					}
+					EndChild();
+					Dummy(ImVec2{ w, 8.0f });
+				}
+
+				if (IsKeyPressed(ImGuiKey_Escape, false)) {
 					open = false;
 				}
 			}
 			End();
+			PopStyleVar(2);
+			PopStyleColor(3);
 			if (!open && g_window) {
 				g_window->IsOpen = false;
 			}

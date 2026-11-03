@@ -811,6 +811,42 @@ namespace fv
 		Play(a_ref, a_name, Settings::Get().loop);
 	}
 
+	void Manager::RemoteFirst(RE::TESObjectREFR* a_ref)
+	{
+		if (!a_ref || RefuseUnsupported(a_ref)) {
+			return;
+		}
+		const auto videos = ListVideos();
+		if (videos.empty()) {
+			Notify(std::format("Real Videos: no videos in {}", Narrow(Settings::Get().videoFolder)));
+			return;
+		}
+		Play(a_ref, videos.front(), Settings::Get().loop);
+	}
+
+	void Manager::RemotePower(RE::TESObjectREFR* a_ref)
+	{
+		if (!a_ref) {
+			return;
+		}
+		if (IsPlaying(a_ref)) {
+			Stop(a_ref);
+			Notify(std::format("Real Videos: {} off", Screen::RefName(a_ref)));
+		} else {
+			RemoteStep(a_ref, 0);
+		}
+	}
+
+	void Manager::RemoteSeek(std::uint32_t a_formID, float a_seconds)
+	{
+		std::scoped_lock lock(_lock);
+		for (auto& p : _players) {
+			if (p->formID == a_formID && !p->stopping) {
+				p->seekDelta += static_cast<std::int64_t>(a_seconds * 10'000'000.0f);
+			}
+		}
+	}
+
 	void Manager::RemoteSetVolume(std::uint32_t a_formID, float a_volume)
 	{
 		std::scoped_lock lock(_lock);
@@ -1062,6 +1098,9 @@ namespace fv
 					}
 				}
 			} else if (p.media) {
+				if (const auto jump = p.seekDelta.exchange(0); jump != 0) {
+					p.media->Seek(p.media->Clock() + jump);
+				}
 				p.media->SetPaused(held);
 				p.media->SetVolume(p.volume);
 				if (!held && p.loop && p.media->Finished()) {

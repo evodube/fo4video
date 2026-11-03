@@ -257,7 +257,13 @@ namespace fv
 		_running = false;
 	}
 
-	void MediaSource::Restart()
+	void MediaSource::Seek(std::int64_t a_position)
+	{
+		const std::int64_t last = _duration > 20'000'000 ? _duration - 10'000'000 : 0;  // not past the last second
+		RestartAt(std::clamp<std::int64_t>(a_position, 0, last));
+	}
+
+	void MediaSource::RestartAt(std::int64_t a_position)
 	{
 		Stop();
 
@@ -272,7 +278,8 @@ namespace fv
 		PROPVARIANT var;
 		::PropVariantInit(&var);
 		var.vt = VT_I8;
-		var.hVal.QuadPart = 0;
+		var.hVal.QuadPart = a_position;
+		_clockOffset = a_position;
 		if (_videoReader) {
 			_videoReader->SetCurrentPosition(GUID_NULL, var);
 		}
@@ -297,13 +304,13 @@ namespace fv
 		const auto wall = [this]() -> std::int64_t {
 			const auto now = _paused ? _pauseStart : steady_t::now();
 			const auto elapsed = now - _wallStart - _pausedTotal;
-			return std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count() / 100;
+			return _clockOffset + std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count() / 100;
 		};
 
 		if (HasAudio() && _audio->SampleRate() > 0) {
 			const auto played = _audio->SamplesPlayed();
 			const auto samples = played >= _samplesBase ? played - _samplesBase : 0;
-			const auto audioClock = static_cast<std::int64_t>(samples * 10'000'000ull / _audio->SampleRate());
+			const auto audioClock = _clockOffset + static_cast<std::int64_t>(samples * 10'000'000ull / _audio->SampleRate());
 			// if the audio track ended early, keep the video going on the wall clock
 			if (_audioEOS && _audio->Queued() == 0) {
 				return std::max(audioClock, wall());

@@ -65,6 +65,7 @@ namespace fv
 		float              userVolume{ 1.0f };
 		std::atomic<bool>  stopping{ false };
 		std::atomic<bool>  userPaused{ false };  // paused from the remote
+		std::atomic<std::int64_t> seekDelta{ 0 };  // rewind / fast-forward requested by the remote (100ns)
 		std::uint64_t      framesShown{ 0 };
 		int                rebindCooldown{ 0 };
 		std::uint32_t      lastVideoWidth{ 0 };
@@ -95,6 +96,9 @@ namespace fv
 		void RemotePlayPause(RE::TESObjectREFR* a_ref);
 		void RemoteStep(RE::TESObjectREFR* a_ref, int a_dir);  // +1 next video, -1 previous
 		void RemotePlayFile(RE::TESObjectREFR* a_ref, const std::wstring& a_name);
+		void RemoteFirst(RE::TESObjectREFR* a_ref);                  // home: first video of the folder
+		void RemotePower(RE::TESObjectREFR* a_ref);                  // off if playing, else on
+		void RemoteSeek(std::uint32_t a_formID, float a_seconds);    // any thread
 		void RemoteSetVolume(std::uint32_t a_formID, float a_volume);  // any thread
 		void RemoteSetMuted(std::uint32_t a_formID, bool a_muted);     // any thread
 		RemoteView View(std::uint32_t a_formID);                      // any thread
