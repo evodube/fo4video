@@ -30,10 +30,21 @@ namespace fv::Remote
 		std::vector<std::string>  g_openPlaylists;  // playlists unfolded in the Playlists panel
 		std::atomic<bool>         g_typing{ false };  // search box has the keyboard: W/A/S/D are letters, not walking
 
+		// shown from a game task, never from the remote's UI thread (see Manager's Notify)
 		void Notify(const std::string& a_message)
 		{
 			log::info("{}", a_message);
-			RE::SendHUDMessage::ShowHUDMessage(a_message.c_str(), nullptr, false, false);
+			if (auto* tasks = F4SE::GetTaskInterface()) {
+				tasks->AddTask([m = a_message]() { RE::SendHUDMessage::ShowHUDMessage(m.c_str(), nullptr, false, false); });
+			}
+		}
+
+		// runs a_fn on the main thread: the remote's UI thread never takes the manager's lock itself
+		void OnMain(std::function<void()> a_fn)
+		{
+			if (auto* tasks = F4SE::GetTaskInterface()) {
+				tasks->AddTask(std::move(a_fn));
+			}
 		}
 
 		std::string Narrow(const std::wstring& a_str)
@@ -122,12 +133,12 @@ namespace fv::Remote
 
 			float volume = v.volume * 100.0f;
 			if (SliderFloat("Volume", &volume, 0.0f, 200.0f, "%.0f%%")) {
-				Manager::Get().RemoteSetVolume(a_formID, volume / 100.0f);
+				OnMain([id = a_formID, x = volume / 100.0f]() { Manager::Get().RemoteSetVolume(id, x); });
 			}
 			SameLine();
 			bool muted = v.muted;
 			if (Checkbox("Mute", &muted)) {
-				Manager::Get().RemoteSetMuted(a_formID, muted);
+				OnMain([id = a_formID, x = muted]() { Manager::Get().RemoteSetMuted(id, x); });
 			}
 			if (v.playing && v.duration > 0.0f) {
 				// while dragging only the slider moves; the video jumps when you let go
@@ -138,7 +149,7 @@ namespace fv::Remote
 					dragging = at;
 				}
 				if (IsItemDeactivatedAfterEdit() && dragging >= 0.0f) {
-					Manager::Get().RemoteSeekTo(a_formID, dragging);
+					OnMain([id = a_formID, x = dragging]() { Manager::Get().RemoteSeekTo(id, x); });
 				}
 				if (!IsItemActive()) {
 					dragging = -1.0f;
@@ -147,7 +158,7 @@ namespace fv::Remote
 						if (v.brightenable) {
 				float bright = v.brightness * 100.0f;
 				if (SliderFloat("Brightness", &bright, 25.0f, 100.0f, "%.0f%%")) {
-					Manager::Get().RemoteSetBrightness(a_formID, bright / 100.0f);
+					OnMain([id = a_formID, x = bright / 100.0f]() { Manager::Get().RemoteSetBrightness(id, x); });
 				}
 			}
 
@@ -582,25 +593,24 @@ namespace fv::Remote
 
 		void Press(Key a_key, std::uint32_t a_target, const RemoteView& a_view)
 		{
-			auto& mgr = Manager::Get();
 			switch (a_key) {
 			case Key::kRewind:
-				mgr.RemoteSeek(a_target, -10.0f);
+				OnMain([a_target, x = -10.0f]() { Manager::Get().RemoteSeek(a_target, x); });
 				break;
 			case Key::kForward:
-				mgr.RemoteSeek(a_target, +10.0f);
+				OnMain([a_target, x = +10.0f]() { Manager::Get().RemoteSeek(a_target, x); });
 				break;
 			case Key::kPlayPause:
 				Post(a_target, [](RE::TESObjectREFR* a_ref) { Manager::Get().RemotePlayPause(a_ref); });
 				break;
 			case Key::kUp:
-				mgr.RemoteSetVolume(a_target, std::min(2.0f, std::round((a_view.volume + 0.1f) * 10.0f) / 10.0f));
+				OnMain([a_target, x = std::min(2.0f, std::round((a_view.volume + 0.1f) * 10.0f) / 10.0f)]() { Manager::Get().RemoteSetVolume(a_target, x); });
 				if (a_view.muted) {
-					mgr.RemoteSetMuted(a_target, false);
+					OnMain([a_target, x = false]() { Manager::Get().RemoteSetMuted(a_target, x); });
 				}
 				break;
 			case Key::kDown:
-				mgr.RemoteSetVolume(a_target, std::max(0.0f, std::round((a_view.volume - 0.1f) * 10.0f) / 10.0f));
+				OnMain([a_target, x = std::max(0.0f, std::round((a_view.volume - 0.1f) * 10.0f) / 10.0f)]() { Manager::Get().RemoteSetVolume(a_target, x); });
 				break;
 			case Key::kLeft:
 				Post(a_target, [](RE::TESObjectREFR* a_ref) { Manager::Get().RemoteStep(a_ref, -1); });
@@ -609,7 +619,7 @@ namespace fv::Remote
 				Post(a_target, [](RE::TESObjectREFR* a_ref) { Manager::Get().RemoteStep(a_ref, +1); });
 				break;
 			case Key::kCenter:
-				mgr.RemoteSetMuted(a_target, !a_view.muted);
+				OnMain([a_target, x = !a_view.muted]() { Manager::Get().RemoteSetMuted(a_target, x); });
 				break;
 			case Key::kPower:
 				Post(a_target, [](RE::TESObjectREFR* a_ref) { Manager::Get().RemotePower(a_ref); });
@@ -632,7 +642,7 @@ namespace fv::Remote
 				break;
 			case Key::kBright:
 				if (a_view.brightenable) {
-					mgr.RemoteSetBrightness(a_target, BrightStep(a_view.brightness, +1));
+					OnMain([a_target, x = BrightStep(a_view.brightness, +1)]() { Manager::Get().RemoteSetBrightness(a_target, x); });
 				}
 				break;
 			case Key::kClose:
@@ -943,14 +953,14 @@ namespace fv::Remote
 						if (view.playing && view.duration > 0.0f) {
 							const float x = (mouse.x - origin.x) / scale;
 							const float f = std::clamp((x - kSeekX0) / (kSeekX1 - kSeekX0), 0.0f, 1.0f);
-							Manager::Get().RemoteSeekTo(target, f * view.duration);
+							OnMain([target, at = f * view.duration]() { Manager::Get().RemoteSeekTo(target, at); });
 						}
 					} else {
 						Press(hover, target, view);
 					}
 				}
 				if (hovered && hover == Key::kBright && view.brightenable && IsItemClicked(1)) {
-					Manager::Get().RemoteSetBrightness(target, BrightStep(view.brightness, -1));  // right click: darker
+					OnMain([target, b = BrightStep(view.brightness, -1)]() { Manager::Get().RemoteSetBrightness(target, b); });  // right click: darker
 				}
 				if (g_resizing) {
 					if (IsMouseDown(0)) {

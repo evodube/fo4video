@@ -146,8 +146,8 @@ namespace fv
 		void RemoteSetVolume(std::uint32_t a_formID, float a_volume);  // any thread
 		void RemoteSetMuted(std::uint32_t a_formID, bool a_muted);     // any thread
 		void RemoteSetBrightness(std::uint32_t a_formID, float a_brightness);  // any thread; saved per screen
-		RemoteView View(std::uint32_t a_formID);                      // any thread
-		std::vector<RemoteView> Views();                              // any thread: every playing screen
+		RemoteView View(std::uint32_t a_formID);                      // any thread; never waits (last known view if busy)
+		std::vector<RemoteView> Views();                              // any thread: every playing screen; never waits
 
 		// --- main thread ---
 		bool Play(RE::TESObjectREFR* a_ref, const std::wstring& a_file, bool a_loop);
@@ -200,6 +200,10 @@ namespace fv
 		RE::ObjectRefHandle _playerWorkshop;  // the settlement you're standing in (none = outside any)
 		bool                _playerWorkshopKnown{ false };
 		std::vector<Sleeper> _sleepers;
+		RemoteView ViewLocked(std::uint32_t a_formID);
+		std::mutex                                   _viewLock;   // the remote's last known views (its UI thread never waits on _lock)
+		std::unordered_map<std::uint32_t, RemoteView> _viewCache;
+		std::vector<RemoteView>                      _viewsCache;
 		std::chrono::steady_clock::time_point _lastWake{};  // saved screens come back one at a time, not all in one frame
 		std::uint64_t        _nextSerial{ 1 };
 		int  FreeSlot() const;

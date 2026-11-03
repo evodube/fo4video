@@ -10,10 +10,14 @@ namespace fv
 	{
 		constexpr std::uint32_t kPatternSize = 256;
 
+		// HUD messages are shown from a game task, never on the spot: callers often hold the manager's lock, or run on
+		// the remote's UI thread, and the HUD can wait on the UI - showing it right there could freeze the game.
 		void Notify(const std::string& a_message)
 		{
 			log::info("{}", a_message);
-			RE::SendHUDMessage::ShowHUDMessage(a_message.c_str(), nullptr, false, false);
+			if (auto* tasks = F4SE::GetTaskInterface()) {
+				tasks->AddTask([m = a_message]() { RE::SendHUDMessage::ShowHUDMessage(m.c_str(), nullptr, false, false); });
+			}
 		}
 
 		// everyday messages (playing, paused, off): can be switched off; problems always show
@@ -73,14 +77,7 @@ namespace fv
 			std::thread                       _thread;
 		};
 
-		void NotifyLater(std::string a_message)
-		{
-			if (auto* tasks = F4SE::GetTaskInterface()) {
-				tasks->AddTask([m = std::move(a_message)]() { Notify(m); });
-			} else {
-				log::info("{}", a_message);
-			}
-		}
+		void NotifyLater(const std::string& a_message) { Notify(a_message); }
 
 		// The settlement whose build area holds a_pos (looked for around a_near), or nullptr when it's outside any.
 		// Works for modded settlements too: it asks the game's own workshop system.
@@ -1639,9 +1636,29 @@ namespace fv
 		}
 	}
 
+	// The remote draws on the game's UI thread every frame. It must never wait for _lock: the main thread can hold it
+	// while it does something that waits for the UI (that froze the game when touching the remote). If the lock is
+	// busy, the remote shows what it showed a frame ago.
 	RemoteView Manager::View(std::uint32_t a_formID)
 	{
-		std::scoped_lock lock(_lock);
+		std::unique_lock lock(_lock, std::try_to_lock);
+		if (!lock.owns_lock()) {
+			std::scoped_lock cache(_viewLock);
+			if (auto it = _viewCache.find(a_formID); it != _viewCache.end()) {
+				return it->second;
+			}
+			RemoteView v;
+			v.formID = a_formID;
+			return v;
+		}
+		auto v = ViewLocked(a_formID);
+		std::scoped_lock cache(_viewLock);
+		_viewCache[a_formID] = v;
+		return v;
+	}
+
+	RemoteView Manager::ViewLocked(std::uint32_t a_formID)
+	{
 		RemoteView v;
 		v.formID = a_formID;
 		v.volume = Settings::Get().startVolume;
@@ -1676,19 +1693,19 @@ namespace fv
 
 	std::vector<RemoteView> Manager::Views()
 	{
-		std::vector<std::uint32_t> ids;
-		{
-			std::scoped_lock lock(_lock);
-			for (auto& p : _players) {
-				if (!p->stopping) {
-					ids.push_back(p->formID);
-				}
-			}
+		std::unique_lock lock(_lock, std::try_to_lock);
+		if (!lock.owns_lock()) {
+			std::scoped_lock cache(_viewLock);
+			return _viewsCache;
 		}
 		std::vector<RemoteView> out;
-		for (auto id : ids) {
-			out.push_back(View(id));
+		for (auto& p : _players) {
+			if (!p->stopping) {
+				out.push_back(ViewLocked(p->formID));
+			}
 		}
+		std::scoped_lock cache(_viewLock);
+		_viewsCache = out;
 		return out;
 	}
 
