@@ -49,7 +49,8 @@ namespace fv
 	struct Player
 	{
 		RE::ObjectRefHandle          ref;
-		std::uint32_t                formID{ 0 };
+		std::uint32_t                formID{ 0 };     // the object it was started on (screen, projector, switch...)
+		std::atomic<std::uint32_t>   screenID{ 0 };   // the object whose mesh shows the video (can be a nearby one)
 		std::string                  name;
 		int                          slot{ -1 };
 		SourceKind                   kind{ SourceKind::kTestPattern };
@@ -135,6 +136,7 @@ namespace fv
 		void StopLocked(Player& a_player);
 		void PollHotkeys();
 		bool IsGamePaused() const;
+		std::uint32_t PrefKeyLocked(std::uint32_t a_formID) const;  // volume/mute key: the screen's object
 		void ScheduleMaintain();
 
 		std::mutex                           _lock;

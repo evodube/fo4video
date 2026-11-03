@@ -152,6 +152,7 @@ namespace fv::Remote
 			kName,
 			kClose,
 			kLock,
+			kResize,
 			kOpacity
 		};
 
@@ -166,6 +167,8 @@ namespace fv::Remote
 		ImVec2         g_pos{};
 		bool           g_dragging = false;
 		float          g_opacity = 1.0f;
+		float          g_size = 1.0f;  // remote size (1 = half the screen height)
+		bool           g_resizing = false;
 		constexpr std::array<float, 5> kOpacitySteps{ 1.0f, 0.85f, 0.7f, 0.55f, 0.4f };
 		ImVec2         g_grab{};
 
@@ -177,6 +180,7 @@ namespace fv::Remote
 			g_stateLoaded = true;
 			g_locked = ::GetPrivateProfileIntA("Remote", "Locked", 0, kStateIni) != 0;
 			g_opacity = std::clamp(static_cast<float>(::GetPrivateProfileIntA("Remote", "Opacity", 100, kStateIni)) / 100.0f, 0.2f, 1.0f);
+			g_size = std::clamp(static_cast<float>(::GetPrivateProfileIntA("Remote", "Size", 100, kStateIni)) / 100.0f, 0.4f, 1.6f);
 			char x[32]{}, y[32]{};
 			::GetPrivateProfileStringA("Remote", "X", "", x, sizeof(x), kStateIni);
 			::GetPrivateProfileStringA("Remote", "Y", "", y, sizeof(y), kStateIni);
@@ -190,6 +194,7 @@ namespace fv::Remote
 		{
 			::WritePrivateProfileStringA("Remote", "Locked", g_locked ? "1" : "0", kStateIni);
 			::WritePrivateProfileStringA("Remote", "Opacity", std::format("{:.0f}", g_opacity * 100.0f).c_str(), kStateIni);
+			::WritePrivateProfileStringA("Remote", "Size", std::format("{:.0f}", g_size * 100.0f).c_str(), kStateIni);
 			::WritePrivateProfileStringA("Remote", "X", std::format("{:.0f}", g_pos.x).c_str(), kStateIni);
 			::WritePrivateProfileStringA("Remote", "Y", std::format("{:.0f}", g_pos.y).c_str(), kStateIni);
 		}
@@ -245,6 +250,9 @@ namespace fv::Remote
 			}
 			if (a_x <= 90 && a_y <= 90) {
 				return Key::kLock;
+			}
+			if (!g_locked && a_x >= kDesignW - 95 && a_y >= kDesignH - 95 && a_x > kBarX1) {
+				return Key::kResize;
 			}
 			if ((a_x - kFadeX) * (a_x - kFadeX) + (a_y - kFadeY) * (a_y - kFadeY) <= kFadeR * kFadeR) {
 				return Key::kOpacity;
@@ -369,6 +377,15 @@ namespace fv::Remote
 				Line(c, sx + 13, sy, sx + 13, 46.0f, 6, col);
 			}
 
+			// resize grip (bottom right, only while unlocked)
+			if (!g_locked) {
+				const ImU32 col = a_hover == Key::kResize ? kText : IM_COL32(120, 120, 120, 255);
+				for (int i = 0; i < 3; ++i) {
+					const float o = 22.0f + i * 22.0f;
+					Line(c, kDesignW - 18, kDesignH - 18 - o, kDesignW - 18 - o, kDesignH - 18, 6, col);
+				}
+			}
+
 			// opacity: a half-filled circle, how see-through the remote is
 			{
 				ImDrawListManager::AddCircleFilled(dl, c.P(kFadeX, kFadeY), kFadeR * c.s, KeyColor(Key::kOpacity, a_hover, a_down), 40);
@@ -460,10 +477,11 @@ namespace fv::Remote
 			const auto target = g_target.load();
 			const auto view = Manager::Get().View(target);
 			auto*      viewport = GetMainViewport();
-			const float scale = viewport->Size.y * 0.5f / kDesignH;
+			LoadState();
+			const float baseScale = viewport->Size.y * 0.5f / kDesignH;
+			const float scale = baseScale * g_size;
 			const float w = kDesignW * scale, h = kDesignH * scale;
 
-			LoadState();
 			if (!g_havePos) {
 				g_pos = ImVec2{ viewport->Pos.x + viewport->Size.x * 0.80f - w * 0.5f, viewport->Pos.y + viewport->Size.y * 0.5f - h * 0.5f };
 				g_havePos = true;
@@ -510,11 +528,23 @@ namespace fv::Remote
 					}
 				}
 				if (hovered && IsItemClicked(0)) {
-					if (hover == Key::kNone && !g_locked) {
+					if (hover == Key::kResize) {
+						g_resizing = true;  // drag the corner: bigger / smaller
+					} else if (hover == Key::kNone && !g_locked) {
 						g_dragging = true;  // grabbed an empty spot: move the remote
 						g_grab = ImVec2{ mouse.x - g_pos.x, mouse.y - g_pos.y };
 					} else {
 						Press(hover, target, view);
+					}
+				}
+				if (g_resizing) {
+					if (IsMouseDown(0)) {
+						const float wantW = std::max(mouse.x - g_pos.x, 1.0f);
+						const float wantH = std::max(mouse.y - g_pos.y, 1.0f);
+						g_size = std::clamp(std::max(wantW / (kDesignW * baseScale), wantH / (kDesignH * baseScale)), 0.4f, 1.6f);
+					} else {
+						g_resizing = false;
+						SaveState();
 					}
 				}
 				if (g_dragging) {
@@ -624,9 +654,9 @@ namespace fv::Remote
 			}
 			Tip("Off: stretch every video to fill its screen. Applies when a video starts (or press Apply below).");
 			dirty |= Checkbox("Cinema: stretch to fill the screen", &s.bigScreenStretch);
-			dirty |= Percent("Cinema brightness", &s.bigScreenBrightness, 2.0f, "100% = as is. Applies right away.");
+			dirty |= Percent("Cinema brightness", &s.bigScreenBrightness, 4.0f, "100% = as is, up to 400%. Only the drive-in screen. Applies right away.");
 			dirty |= Percent("Cinema VHS look", &s.bigScreenVHS, 1.0f, "Soft picture, colour bleed, faded colours, faint scanlines. 0% = off.");
-			dirty |= Percent("TV brightness (glowing screens)", &s.brightness, 3.0f, "Brightness of TVs and other glowing screens.");
+			dirty |= Percent("TV brightness (glowing screens)", &s.brightness, 4.0f, "Brightness of TVs and other glowing screens, up to 400%.");
 			dirty |= Checkbox("Projectors: draw the video only inside the screen", &s.composite);
 			Tip("Off: the video covers the whole mesh, frame included.");
 			dirty |= Checkbox("Two-sided screens: show on both sides", &s.bothSides);
@@ -671,6 +701,12 @@ namespace fv::Remote
 					g_opacity = opacity / 100.0f;
 					SaveState();
 				}
+				float size = g_size * 100.0f;
+				if (SliderFloat("Remote size", &size, 40.0f, 160.0f, "%.0f%%")) {
+					g_size = size / 100.0f;
+					SaveState();
+				}
+				Tip("Or unlock the remote and drag its bottom-right corner.");
 				if (Checkbox("Lock the remote in place", &g_locked)) {
 					SaveState();
 				}

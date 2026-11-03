@@ -154,7 +154,7 @@ namespace fv
 		hideOverlays = ReadBool(L"Screen", L"bHideOverlays", hideOverlays);
 		classicTV = ReadBool(L"Screen", L"bClassicTVScreens", classicTV);
 		nearbyRadius = std::max(0.0f, ReadFloat(L"Screen", L"fNearbyObjectRadius", nearbyRadius));
-		brightness = ReadFloat(L"Screen", L"fBrightness", brightness);
+		brightness = std::clamp(ReadFloat(L"Screen", L"fBrightness", brightness), 0.0f, 4.0f);
 		placeholderPrefix = Narrow(ReadString(L"Screen", L"sPlaceholderPrefix", L""));
 
 		enableAudio = ReadBool(L"Audio", L"bEnableAudio", enableAudio);

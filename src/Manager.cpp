@@ -27,6 +27,25 @@ namespace fv
 			return out;
 		}
 
+		// A player belongs to the object it was started on and to the object whose screen it plays on
+		// (the drive-in started from its switch is the same video as the one started on the screen).
+		bool Is(const Player& a_player, std::uint32_t a_formID)
+		{
+			return a_formID != 0 && (a_player.formID == a_formID || a_player.screenID.load() == a_formID);
+		}
+
+		std::uint32_t PrefKey(const Player& a_player)
+		{
+			const auto screen = a_player.screenID.load();
+			return screen != 0 ? screen : a_player.formID;
+		}
+
+		std::uint32_t ScreenOf(const ScreenBinding& a_binding)
+		{
+			auto owner = a_binding.owner.get();
+			return owner ? owner->GetFormID() : 0;
+		}
+
 		RE::NiPointer<RE::TESObjectREFR> PickedRef()
 		{
 			return Manager::Get().Target();
@@ -438,7 +457,7 @@ namespace fv
 		{
 			std::scoped_lock lock(_lock);
 			for (auto& p : _players) {
-				if (p->formID == a_ref->GetFormID()) {
+				if (Is(*p, a_ref->GetFormID())) {
 					StopLocked(*p);
 				}
 			}
@@ -490,6 +509,33 @@ namespace fv
 			releaseSlot();
 			return false;
 		}
+		// Another video already on this very mesh (e.g. the drive-in started from its switch, then from the
+		// screen): that one stops. Undo our bind first so its original look comes back cleanly, then bind again.
+		{
+			auto* geom = player->binding.geometry.get();
+			bool  clash = false;
+			{
+				std::scoped_lock lock(_lock);
+				for (auto& p : _players) {
+					clash |= !p->stopping && p->binding.bound && p->binding.geometry.get() == geom;
+				}
+				if (clash) {
+					Screen::Unbind(player->binding);
+					for (auto& p : _players) {
+						if (!p->stopping && p->binding.bound && p->binding.geometry.get() == geom) {
+							log::info("{}: '{}' is already playing on that screen; replacing it", refName, p->name);
+							StopLocked(*p);
+						}
+					}
+				}
+			}
+			if (clash && !Screen::Bind(a_ref, slotTexture.get(), player->binding)) {
+				Notify(std::format("Real Videos: no screen found on {} (see RealVideos.log)", refName));
+				releaseSlot();
+				return false;
+			}
+		}
+		player->screenID = ScreenOf(player->binding);
 		player->srgb = player->binding.originalWasSRGB;
 		player->screenAspect = player->binding.screenAspect;
 
@@ -529,7 +575,7 @@ namespace fv
 		}
 		std::scoped_lock lock(_lock);
 		for (auto& p : _players) {
-			if (p->formID == a_ref->GetFormID()) {
+			if (Is(*p, a_ref->GetFormID())) {
 				StopLocked(*p);
 			}
 		}
@@ -550,7 +596,7 @@ namespace fv
 		}
 		std::scoped_lock lock(_lock);
 		for (auto& p : _players) {
-			if (p->formID == a_ref->GetFormID() && !p->stopping) {
+			if (Is(*p, a_ref->GetFormID()) && !p->stopping) {
 				return true;
 			}
 		}
@@ -564,7 +610,7 @@ namespace fv
 		}
 		std::scoped_lock lock(_lock);
 		for (auto& p : _players) {
-			if (p->formID == a_ref->GetFormID()) {
+			if (Is(*p, a_ref->GetFormID())) {
 				p->userVolume = std::clamp(a_volume, 0.0f, 4.0f);
 			}
 		}
@@ -621,6 +667,17 @@ namespace fv
 					Screen::Unbind(p->binding);
 					if (root && _slots[p->slot].niTexture) {
 						if (Screen::Bind(ref.get(), _slots[p->slot].niTexture.get(), p->binding)) {
+							auto* geom = p->binding.geometry.get();
+							const bool taken = std::ranges::any_of(_players, [&](const auto& o) {
+								return o.get() != p.get() && !o->stopping && o->binding.bound && o->binding.geometry.get() == geom;
+							});
+							if (taken) {
+								// another video owns that screen now: don't fight over it
+								log::info("{}: its screen is used by another video; stopping", p->name);
+								StopLocked(*p);
+								continue;
+							}
+							p->screenID = ScreenOf(p->binding);
 							_slots[p->slot].compNeedsDraw = true;
 							p->srgb = p->binding.originalWasSRGB;
 							p->screenAspect = p->binding.screenAspect;
@@ -644,7 +701,7 @@ namespace fv
 				const float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
 				const float gain = big ? Attenuate(dist, settings.bigMinDistance, settings.bigMaxDistance, settings.falloffCurve)
 				                       : Attenuate(dist, settings.minDistance, settings.maxDistance, settings.falloffCurve);
-				const auto& pr = _prefs[p->formID];
+				const auto& pr = _prefs[PrefKey(*p)];
 				const float screenVolume = pr.volume < 0.0f ? settings.startVolume : pr.volume;
 				volume = pr.muted ? 0.0f : settings.volume * p->userVolume * screenVolume * gain;
 			}
@@ -756,7 +813,7 @@ namespace fv
 		{
 			std::scoped_lock lock(_lock);
 			for (auto& p : _players) {
-				if (p->formID == a_ref->GetFormID() && !p->stopping) {
+				if (Is(*p, a_ref->GetFormID()) && !p->stopping) {
 					p->userPaused = !p->userPaused;
 					Notify(std::format("Real Videos: {} {}", p->userPaused ? "paused" : "playing", p->name));
 					return;
@@ -782,7 +839,7 @@ namespace fv
 		{
 			std::scoped_lock lock(_lock);
 			for (auto& p : _players) {
-				if (p->formID == a_ref->GetFormID() && !p->stopping && p->kind == SourceKind::kVideo) {
+				if (Is(*p, a_ref->GetFormID()) && !p->stopping && p->kind == SourceKind::kVideo) {
 					const auto current = std::filesystem::path(p->file).filename().wstring();
 					for (std::size_t i = 0; i < videos.size(); ++i) {
 						if (_wcsicmp(std::filesystem::path(videos[i]).filename().wstring().c_str(), current.c_str()) == 0) {
@@ -840,7 +897,7 @@ namespace fv
 	{
 		std::scoped_lock lock(_lock);
 		for (auto& p : _players) {
-			if (p->formID == a_formID && !p->stopping) {
+			if (Is(*p, a_formID) && !p->stopping) {
 				p->seekDelta += static_cast<std::int64_t>(a_seconds * 10'000'000.0f);
 			}
 		}
@@ -858,16 +915,26 @@ namespace fv
 		Notify("Real Videos: settings applied to the playing screens");
 	}
 
+	std::uint32_t Manager::PrefKeyLocked(std::uint32_t a_formID) const
+	{
+		for (auto& p : _players) {
+			if (!p->stopping && Is(*p, a_formID)) {
+				return PrefKey(*p);
+			}
+		}
+		return a_formID;
+	}
+
 	void Manager::RemoteSetVolume(std::uint32_t a_formID, float a_volume)
 	{
 		std::scoped_lock lock(_lock);
-		_prefs[a_formID].volume = std::clamp(a_volume, 0.0f, 2.0f);
+		_prefs[PrefKeyLocked(a_formID)].volume = std::clamp(a_volume, 0.0f, 2.0f);
 	}
 
 	void Manager::RemoteSetMuted(std::uint32_t a_formID, bool a_muted)
 	{
 		std::scoped_lock lock(_lock);
-		_prefs[a_formID].muted = a_muted;
+		_prefs[PrefKeyLocked(a_formID)].muted = a_muted;
 	}
 
 	RemoteView Manager::View(std::uint32_t a_formID)
@@ -876,14 +943,14 @@ namespace fv
 		RemoteView v;
 		v.formID = a_formID;
 		v.volume = Settings::Get().startVolume;
-		if (auto it = _prefs.find(a_formID); it != _prefs.end()) {
+		if (auto it = _prefs.find(PrefKeyLocked(a_formID)); it != _prefs.end()) {
 			if (it->second.volume >= 0.0f) {
 				v.volume = it->second.volume;
 			}
 			v.muted = it->second.muted;
 		}
 		for (auto& p : _players) {
-			if (p->formID == a_formID && !p->stopping) {
+			if (Is(*p, a_formID) && !p->stopping) {
 				v.name = p->name;
 				v.playing = true;
 				v.paused = p->userPaused;
@@ -958,7 +1025,7 @@ namespace fv
 			std::scoped_lock lock(_lock);
 			Player*          player = nullptr;
 			for (auto& p : _players) {
-				if (p->formID == ref->GetFormID() && !p->stopping) {
+				if (Is(*p, ref->GetFormID()) && !p->stopping) {
 					player = p.get();
 				}
 			}
