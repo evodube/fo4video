@@ -1007,8 +1007,8 @@ namespace fv::Remote
 			dirty |= Checkbox("Decode videos on the graphics card (test)", &s.gpuDecode);
 			Tip("Much less work for the CPU and memory. Applies to videos started from now on. If a screen stays blank or "
 				"looks wrong, untick it and start the video again.");
-			dirty |= Checkbox("Pause the picture when far away or out of view", &s.freeze);
-			Tip("The sound carries on; the picture catches up the moment you look at it or come closer.");
+			dirty |= Checkbox("Pause the video when far away or out of view", &s.freeze);
+			Tip("Picture and sound pause, and carry on from the same spot when you look at the screen or come closer.");
 			if (s.freeze) {
 				dirty |= Meters("...further away than##freeze", &s.freezeDistance, 300.0f, "Or whenever the screen isn't in front of you.");
 				dirty |= SliderFloat("...for longer than##freeze", &s.freezeSeconds, 0.0f, 120.0f, "%.0f s");
@@ -1023,8 +1023,7 @@ namespace fv::Remote
 			Tip("Saves memory and frees the screen's place. It remembers the video and where it was, and carries on from there when "
 				"you come back.");
 			if (s.autoOff) {
-				dirty |= Meters("...further away than##off", &s.autoOffDistance, 300.0f,
-					"Never closer than you can still hear the screen (the sound distances below).");
+				dirty |= Meters("...further away than##off", &s.autoOffDistance, 300.0f, "Measured from the screen, the cinema included.");
 				dirty |= SliderFloat("...for longer than##off", &s.autoOffSeconds, 0.0f, 120.0f, "%.0f s");
 			}
 

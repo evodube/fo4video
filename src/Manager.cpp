@@ -909,7 +909,7 @@ namespace fv
 					p->unseenSince = now;
 				} else if (!p->frozen && now - p->unseenSince >= std::chrono::duration<float>(settings.freezeSeconds)) {
 					p->frozen = true;
-					log::info("{}: picture paused ({}); the sound carries on", p->name, inView ? "far away" : "out of view");
+					log::info("{}: paused ({})", p->name, inView ? "far away" : "out of view");
 				}
 			} else {
 				p->frozen = false;
@@ -948,7 +948,7 @@ namespace fv
 			if ((settings.autoOff || goOff) && player) {
 				auto*      g = p->binding.bound ? p->binding.geometry.get() : nullptr;
 				const auto where = g ? g->worldBound.center : ref->GetPosition();
-				const float limit = std::max(settings.autoOffDistance, p->binding.bigScreen ? settings.bigMaxDistance : settings.maxDistance);
+				const float limit = settings.autoOffDistance;
 				const float ax = where.x - playerPos.x, ay = where.y - playerPos.y, az = where.z - playerPos.z;
 				const auto  now = std::chrono::steady_clock::now();
 				const bool farAway = settings.autoOff && std::sqrt(ax * ax + ay * ay + az * az) > limit;
@@ -1020,7 +1020,7 @@ namespace fv
 		if (settings.syncSameVideo && !buildMode) {
 			for (std::size_t i = 0; i < _players.size(); ++i) {
 				auto& lead = *_players[i];
-				if (lead.stopping || !lead.media || lead.kind != SourceKind::kVideo) {
+				if (lead.stopping || !lead.media || lead.kind != SourceKind::kVideo || lead.frozen.load()) {
 					continue;
 				}
 				bool first = true;
@@ -1037,7 +1037,7 @@ namespace fv
 				const auto leadClock = lead.media->Clock();
 				for (std::size_t k = i + 1; k < _players.size(); ++k) {
 					auto& f = *_players[k];
-					if (f.stopping || !f.media || !SameVideo(f.file, lead.file) || f.seekDelta.load() != 0) {
+					if (f.stopping || !f.media || !SameVideo(f.file, lead.file) || f.seekDelta.load() != 0 || f.frozen.load()) {
 						continue;
 					}
 					f.userPaused = lead.userPaused.load();
@@ -1065,7 +1065,8 @@ namespace fv
 				// settlement; while you're in another settlement it stays off even if that one is next door
 				auto       mine = it->workshop.get();
 				auto       here = _playerWorkshopKnown ? _playerWorkshop.get() : RE::NiPointer<RE::TESObjectREFR>{};
-				const bool wake = settings.offInOtherSettlement && mine ? (here ? here.get() == mine.get() : isNear) : isNear;
+				const bool elsewhere = settings.offInOtherSettlement && mine && here && here.get() != mine.get();
+				const bool wake = (!settings.autoOff || isNear) && !elsewhere;
 				if (wake && ref->Get3D()) {
 					if (auto* tasks = F4SE::GetTaskInterface()) {
 						tasks->AddTask([this, s = *it]() {
@@ -1788,23 +1789,13 @@ namespace fv
 				if (const auto jump = p.seekDelta.exchange(0); jump != 0) {
 					p.media->Seek(p.media->Clock() + jump);
 				}
-				p.media->SetPaused(held);
+				// far away / out of view: paused like the remote's pause (picture and sound), carries on from the same spot
+				const bool frozen = p.frozen.load();
+				p.wasFrozen = frozen;
+				p.media->SetPaused(held || frozen);
 				p.media->SetVolume(p.volume);
 				p.media->SetPan(p.pan.load());
-				// frozen (far / out of view): no frames taken, so the decoder idles once its few frames are queued;
-				// coming back, the picture jumps to where the sound is
-				const bool frozen = p.frozen.load();
-				if (frozen != p.wasFrozen) {
-					p.wasFrozen = frozen;
-					if (!frozen) {
-						if (p.media->VideoEnded()) {
-							p.media->Seek(p.media->Clock());
-						} else {
-							p.media->SeekVideo(p.media->Clock());
-						}
-					}
-				}
-				if (!held && p.loop && (p.media->Finished() || (frozen && p.media->Duration() > 0 && p.media->Clock() >= p.media->Duration()))) {
+				if (!held && !frozen && p.loop && p.media->Finished()) {
 					p.media->Restart();
 				}
 				VideoFrame frame;
