@@ -111,6 +111,7 @@ namespace fv
 		put(L"Screen", L"fBrightness", f(brightness));
 		put(L"Screen", L"bSelfLitScreens", b(selfLit));
 		put(L"Screen", L"bSelfLitLatePass", b(selfLitLatePass));
+		put(L"Screen", L"bFrameLitByWorld", b(glowMap));
 		put(L"Screen", L"bGlowPictureOnly", b(selfLitFaceOnly));
 		put(L"Screen", L"bGlowMap", b(glowMap));
 
@@ -170,6 +171,7 @@ namespace fv
 		bigScreenStretch = ReadBool(L"Screen", L"bStretchOnBigScreens", bigScreenStretch);
 		selfLit = ReadBool(L"Screen", L"bSelfLitScreens", selfLit);
 		selfLitLatePass = ReadBool(L"Screen", L"bSelfLitLatePass", selfLitLatePass);
+		glowMap = ReadBool(L"Screen", L"bFrameLitByWorld", glowMap);
 		selfLitFaceOnly = ReadBool(L"Screen", L"bGlowPictureOnly", selfLitFaceOnly);
 		bigScreenBrightness = std::clamp(ReadFloat(L"Screen", L"fBigScreenBrightness", bigScreenBrightness), 0.1f, 4.0f);
 		bigScreenVHS = std::clamp(ReadFloat(L"Screen", L"fBigScreenVHS", bigScreenVHS), 0.0f, 1.0f);

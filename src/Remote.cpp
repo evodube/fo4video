@@ -705,6 +705,12 @@ namespace fv::Remote
 				ApplyNow();  // switch the screens playing now too
 			}
 			Tip("Stops what stands behind a screen (the drive-in's catwalk) from showing through the picture.");
+			if (Checkbox("Projectors: frame lit by the world", &s.glowMap)) {
+				dirty = true;
+				ApplyNow();  // switch the screens playing now too
+			}
+			Tip("The screen keeps the game's lighting, so its frame, back and pole react to light like anything else; only the "
+				"picture glows. Off: the whole screen glows.");
 			dirty |= Checkbox("Cinema: stretch to fill the screen", &s.bigScreenStretch);
 			dirty |= Percent("Cinema brightness", &s.bigScreenBrightness, 4.0f, "100% = as is, up to 400%. Only the drive-in screen. Applies right away.");
 			dirty |= Percent("Cinema VHS look", &s.bigScreenVHS, 1.0f, "Soft picture, colour bleed, faded colours, faint scanlines. 0% = off.");
