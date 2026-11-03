@@ -221,7 +221,7 @@ namespace fv::Remote
 
 		void Chevron(const Canvas& c, float cx, float cy, float dx, float dy)  // tip points along (dx, dy)
 		{
-			const float len = 52, back = 28, w = 14;
+			const float len = 54, back = 56, w = 14;
 			const float tx = cx + dx * back * 0.5f, ty = cy + dy * back * 0.5f;      // tip
 			const float bx = cx - dx * back * 0.5f, by = cy - dy * back * 0.5f;      // back of the arms
 			const float px = -dy, py = dx;                                         // across
