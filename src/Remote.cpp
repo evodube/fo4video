@@ -1002,23 +1002,10 @@ namespace fv::Remote
 				sizeCombo("Cinema video size", &s.maxHeightCinema, { { "1080p", 1080 }, { "4K (full size)", 0 } });
 				Tip("The drive-in screen fills a lot of your view; 4K is sharper but much more work. Applies to videos started from now on.");
 			}
-			dirty |= Checkbox("Decode videos on the graphics card (test)", &s.gpuDecode);
+			dirty |= Checkbox("Decode videos on the graphics card", &s.gpuDecode);
 			Tip("Much less work for the CPU and memory. Applies to videos started from now on. If a screen stays blank or "
 				"looks wrong, untick it and start the video again.");
-			dirty |= Checkbox("Pause the video when far away or out of view (TVs, projectors)", &s.freeze);
-			Tip("Picture and sound pause, and carry on from the same spot when you look at the screen or come closer.");
-			if (s.freeze) {
-				dirty |= Meters("...further away than##freeze", &s.freezeDistance, 300.0f, "Or whenever the screen isn't in front of you.");
-				dirty |= SliderFloat("...for longer than##freeze", &s.freezeSeconds, 0.0f, 120.0f, "%.0f s");
-			}
-			dirty |= Checkbox("Turn screens off when you walk away (TVs, projectors)", &s.autoOff);
-			Tip("Saves memory and frees the screen's place. It remembers the video and where it was, and carries on from there when "
-				"you come back.");
-			if (s.autoOff) {
-				dirty |= Meters("...further away than##off", &s.autoOffDistance, 300.0f, "TVs and projectors. The cinema has its own below.");
-				dirty |= SliderFloat("...for longer than##off", &s.autoOffSeconds, 0.0f, 120.0f, "%.0f s");
-			}
-			// the drive-in: seen and heard from much further away, so its own distances
+			// the drive-in first: seen and heard from much further away, so its own distances
 			dirty |= Checkbox("Cinema: pause when far away or out of view", &s.cinemaFreeze);
 			Tip("Picture and sound pause, and carry on from the same spot when you look at the screen or come closer.");
 			if (s.cinemaFreeze) {
@@ -1030,6 +1017,18 @@ namespace fv::Remote
 			if (s.cinemaAutoOff) {
 				dirty |= Meters("...further away than##coff", &s.cinemaAutoOffDistance, 600.0f, "Measured from the drive-in screen.");
 				dirty |= SliderFloat("...for longer than##coff", &s.cinemaAutoOffSeconds, 0.0f, 120.0f, "%.0f s");
+			}
+			dirty |= Checkbox("TVs, Projectors: pause when far away or out of view", &s.freeze);
+			Tip("Picture and sound pause, and carry on from the same spot when you look at the screen or come closer.");
+			if (s.freeze) {
+				dirty |= Meters("...further away than##freeze", &s.freezeDistance, 300.0f, "Or whenever the screen isn't in front of you.");
+				dirty |= SliderFloat("...for longer than##freeze", &s.freezeSeconds, 0.0f, 120.0f, "%.0f s");
+			}
+			dirty |= Checkbox("TVs, Projectors: turn off when you walk away", &s.autoOff);
+			Tip("Remembers the video and where it was, and carries on from there when you come back.");
+			if (s.autoOff) {
+				dirty |= Meters("...further away than##off", &s.autoOffDistance, 300.0f, "Measured from the screen.");
+				dirty |= SliderFloat("...for longer than##off", &s.autoOffSeconds, 0.0f, 120.0f, "%.0f s");
 			}
 
 			SeparatorText("Picking a screen");

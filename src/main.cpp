@@ -53,7 +53,7 @@ extern "C" __declspec(dllexport) bool F4SEAPI F4SEPlugin_Load(const F4SE::LoadIn
 {
 	F4SE::Init(a_f4se, { .log = true, .logName = kName, .trampoline = false });
 
-	fv::log::info("Real Videos ({}) 0.55.0 loading on runtime {} ({})", kName, a_f4se->RuntimeVersion().string(),
+	fv::log::info("Real Videos ({}) 0.56.0 loading on runtime {} ({})", kName, a_f4se->RuntimeVersion().string(),
 		REX::FModule::IsRuntimeOG() ? "OG" : REX::FModule::IsRuntimeNG() ? "NG" : "AE");
 	if (!REX::FModule::IsRuntimeOG()) {
 		fv::log::warn("game {}: supported, but tested on 1.10.163 so far; please report problems with RealVideos.log",

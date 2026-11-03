@@ -15,7 +15,7 @@ namespace fv
 		bool         loop{ true };
 		bool         pauseInMenus{ true };
 		bool         pauseUnfocused{ true };
-		int          maxScreens{ 8 };
+		int          maxScreens{ 10 };
 
 		// [Screen]
 		std::vector<std::string> screenNames{ "screen", "display", "monitor", "crt" };
@@ -30,7 +30,7 @@ namespace fv
 		bool                     classicTV{ true };
 		bool                     onlySupportedScreens{ true };
 		bool                     aimToSelect{ true };     // hotkeys and the remote use the screen under the crosshair
-		float                    aimDistance{ 15000.0f };
+		float                    aimDistance{ 14000.0f };  // ~200 m
 		int                      keyRemote{ 0x75 };       // F6: open/close the remote  // F9/F10 only on TVs, VotW projectors/screens, the drive-in          // glowing TV screens: whole video, mesh UVs untouched (0.1 behaviour)
 		float                    nearbyRadius{ 15000.0f };    // projectors / Ctrl+F7 look for screens this close
 		float                    brightness{ 1.0f };
@@ -58,10 +58,10 @@ namespace fv
 		bool  cinemaAutoOff{ true };
 		float cinemaAutoOffDistance{ 21000.0f };    // ~300 m
 		float cinemaAutoOffSeconds{ 30.0f };
-		int   maxHeightTV{ 720 };            // decode videos no taller than this (0 = full size)
+		int   maxHeightTV{ 480 };            // decode videos no taller than this (0 = full size)
 		int   maxHeightProjector{ 1080 };
 		int   maxHeightCinema{ 1080 };
-		bool  gpuDecode{ false };            // decode on the graphics card (test)
+		bool  gpuDecode{ true };             // decode on the graphics card
 		float minDistance{ 150.0f };
 		float maxDistance{ 1500.0f };
 		float falloffCurve{ 2.0f };
@@ -73,7 +73,7 @@ namespace fv
 		bool  selfLitFaceOnly{ true };       // only the picture glows (a glowing copy over it); frame keeps normal lighting
 		bool  glowMap{ true };               // projectors: lit screen + glowing picture (glow map) instead of the glowing shader
 		float frameLight{ 1.0f };            // fallback glow (no glow map possible): back/frame/pole follow the world's light
-		float bigScreenVHS{ 0.5f };          // big screens: VHS tape look, 0 = off, 1 = strong
+		float bigScreenVHS{ 0.35f };          // big screens: VHS tape look, 0 = off, 1 = strong
 		float startVolume{ 0.5f };           // volume each screen starts at (the remote's middle button)
 		float bigMinDistance{ 1500.0f };
 		float bigMaxDistance{ 12000.0f };
