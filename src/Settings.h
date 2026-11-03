@@ -39,6 +39,7 @@ namespace fv
 		int          keyNextMesh{ VK_F7 };  // Shift+key flips the picture
 		std::wstring videoFolder{ L"Data\\Videos" };
 		bool         loop{ true };
+		bool         shuffle{ false };  // next / previous / power-on / end of a video: a random video from the same folder
 		bool         pauseInMenus{ true };
 		bool         pauseUnfocused{ true };
 		int          maxScreens{ 10 };

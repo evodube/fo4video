@@ -26,6 +26,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <random>
 #include <span>
 #include <string>
 #include <string_view>

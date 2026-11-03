@@ -706,6 +706,19 @@ namespace fv
 		if (openJob) {
 			Opener::Get().Add(std::move(openJob));  // only once the player is in the list it looks for
 		}
+		// what this screen has played, for shuffle (random picks avoid recent ones; previous goes back through it)
+		if (a_kind == SourceKind::kVideo) {
+			std::error_code ec;
+			const auto      root = std::filesystem::absolute(std::filesystem::path(Settings::Get().videoFolder), ec);
+			const auto      rel = std::filesystem::path(a_file).lexically_relative(root).wstring();  // as ListVideos names it
+			auto&           history = _shuffleHistory[a_ref->GetFormID()];
+			if (history.empty() || _wcsicmp(history.back().c_str(), rel.c_str()) != 0) {
+				history.push_back(rel);
+				if (history.size() > 64) {
+					history.erase(history.begin());
+				}
+			}
+		}
 
 		if (a_quiet) {
 			log::info("{}: back on ({}), carrying on at {:.0f}s", refName, Narrow(std::filesystem::path(a_file).filename().wstring()),
@@ -1396,6 +1409,41 @@ namespace fv
 		if (videos.empty()) {
 			return;
 		}
+		if (Settings::Get().shuffle) {
+			const auto id = a_ref->GetFormID();
+			auto&      history = _shuffleHistory[id];
+			// previous: back to the video played before this one (if it's still in this folder)
+			if (a_dir < 0 && playing && history.size() >= 2) {
+				history.pop_back();  // the current one
+				const auto back = history.back();
+				history.pop_back();  // starting it adds it again
+				if (std::ranges::any_of(videos, [&](const std::wstring& a_v) { return _wcsicmp(a_v.c_str(), back.c_str()) == 0; })) {
+					Play(a_ref, back, Settings::Get().loop);
+					return;
+				}
+			}
+			// a random one, not the current one and not one of the last few played (about half the folder)
+			std::vector<std::size_t> pool;
+			const std::size_t        avoid = std::min(history.size(), videos.size() / 2);
+			for (std::size_t i = 0; i < videos.size(); ++i) {
+				const bool recent = std::any_of(history.end() - static_cast<std::ptrdiff_t>(avoid), history.end(),
+					[&](const std::wstring& a_h) { return _wcsicmp(a_h.c_str(), videos[i].c_str()) == 0; });
+				const bool isCurrent = playing && static_cast<std::ptrdiff_t>(i) == index;
+				if (!recent && (!isCurrent || videos.size() == 1)) {
+					pool.push_back(i);
+				}
+			}
+			if (pool.empty()) {
+				for (std::size_t i = 0; i < videos.size(); ++i) {
+					if (!playing || static_cast<std::ptrdiff_t>(i) != index || videos.size() == 1) {
+						pool.push_back(i);
+					}
+				}
+			}
+			const auto pick = videos[pool[std::uniform_int_distribution<std::size_t>(0, pool.size() - 1)(_rng)]];
+			Play(a_ref, pick, Settings::Get().loop);  // with shuffle on, the end of a video moves on instead of repeating
+			return;
+		}
 		if (playing) {
 			const auto n = static_cast<std::ptrdiff_t>(videos.size());
 			index = ((index + a_dir) % n + n) % n;
@@ -1972,8 +2020,22 @@ namespace fv
 				p.media->SetPaused(held || frozen);
 				p.media->SetVolume(p.volume);
 				p.media->SetPan(p.pan.load());
-				if (!held && !frozen && p.loop && p.media->Finished()) {
-					p.media->Restart();
+				if (!held && !frozen && p.media->Finished()) {
+					if (settings.shuffle && p.kind == SourceKind::kVideo) {
+						// shuffle: another random video from the same folder
+						if (!p.advancePending) {
+							p.advancePending = true;
+							if (auto* tasks = F4SE::GetTaskInterface()) {
+								tasks->AddTask([this, id = p.formID]() {
+									if (auto* ref = RE::TESForm::GetFormByID<RE::TESObjectREFR>(id); ref && ref->Get3D()) {
+										RemoteStep(ref, +1);
+									}
+								});
+							}
+						}
+					} else if (p.loop) {
+						p.media->Restart();
+					}
 				}
 				VideoFrame frame;
 				if (!frozen && p.media->AcquireFrame(p.media->Clock(), frame) && frame.gpuTexture) {

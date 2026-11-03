@@ -91,6 +91,7 @@ namespace fv
 		auto i = [](int a_v) { return std::to_wstring(a_v); };
 
 		put(L"General", L"bLoop", b(loop));
+		put(L"General", L"bShuffle", b(shuffle));
 		put(L"General", L"bPauseInMenus", b(pauseInMenus));
 		put(L"General", L"bPauseWhenAltTabbed", b(pauseUnfocused));
 		put(L"General", L"iMaxScreens", i(maxScreens));
@@ -168,6 +169,7 @@ namespace fv
 		keyNextMesh = ReadInt(L"General", L"iKeyNextMesh", keyNextMesh);
 		videoFolder = ReadString(L"General", L"sVideoFolder", videoFolder);
 		loop = ReadBool(L"General", L"bLoop", loop);
+		shuffle = ReadBool(L"General", L"bShuffle", shuffle);
 		pauseInMenus = ReadBool(L"General", L"bPauseInMenus", pauseInMenus);
 		pauseUnfocused = ReadBool(L"General", L"bPauseWhenAltTabbed", pauseUnfocused);
 		maxScreens = std::clamp(ReadInt(L"General", L"iMaxScreens", maxScreens), 1, 20);

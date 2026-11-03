@@ -89,7 +89,8 @@ namespace fv
 		std::chrono::steady_clock::time_point awaySince{};
 		bool               unseen{ false };  // far or out of view (freeze timer running)
 		std::chrono::steady_clock::time_point unseenSince{};
-		std::atomic<bool>  frozen{ false };  // picture not updated (sound carries on)
+		std::atomic<bool>  frozen{ false };
+		bool               advancePending{ false };  // shuffle: the next random video was asked for at the end  // picture not updated (sound carries on)
 		bool               wasFrozen{ false };  // render thread
 		// GPU decoding: the decoder's shared textures opened on the game's device (render thread)
 		struct GpuIn
@@ -229,6 +230,8 @@ namespace fv
 		std::atomic<bool> _maintainPending{ false };
 		std::uint64_t     _frame{ 0 };
 		std::size_t       _nextVideo{ 0 };
+		std::unordered_map<std::uint32_t, std::vector<std::wstring>> _shuffleHistory;  // per screen: videos played, newest last
+		std::mt19937                                                 _rng{ std::random_device{}() };
 		std::array<bool, 6> _keyWasDown{};
 		struct Prefs
 		{
