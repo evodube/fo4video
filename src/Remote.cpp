@@ -25,6 +25,10 @@ namespace fv::Remote
 		std::string              g_targetName;
 		std::vector<std::wstring> g_videoFiles;
 		std::vector<std::string>  g_videoNames;
+		std::vector<std::string>  g_videoFolders;  // each video's folder ("" = the video folder itself)
+		std::string               g_browse;        // folder shown in the remote's list
+		char                      g_search[96]{};  // remote list search box
+		std::atomic<bool>         g_typing{ false };  // search box has the keyboard: W/A/S/D are letters, not walking
 
 		void Notify(const std::string& a_message)
 		{
@@ -60,14 +64,16 @@ namespace fv::Remote
 		void RefreshVideoList()
 		{
 			auto files = Manager::Get().ListVideos();
-			std::vector<std::string> names;
+			std::vector<std::string> names, folders;
 			names.reserve(files.size());
 			for (const auto& f : files) {
 				names.push_back(Narrow(std::filesystem::path(f).stem().wstring()));
+				folders.push_back(Narrow(std::filesystem::path(f).parent_path().wstring()));
 			}
 			std::scoped_lock lock(g_lock);
 			g_videoFiles = std::move(files);
 			g_videoNames = std::move(names);
+			g_videoFolders = std::move(folders);
 		}
 
 		void Tip(const char* a_text)
@@ -585,6 +591,11 @@ namespace fv::Remote
 			case Key::kName:
 				g_listOpen = !g_listOpen;
 				g_scrollToCurrent = g_listOpen;
+				if (g_listOpen) {
+					std::scoped_lock lock(g_lock);
+					g_browse = a_view.playing ? a_view.folder : g_browse;  // open where the current video is
+					g_search[0] = 0;
+				}
 				break;
 			case Key::kAll:
 				Post(a_target, [](RE::TESObjectREFR* a_ref) { Manager::Get().AllScreensToggle(a_ref); });
@@ -701,28 +712,101 @@ namespace fv::Remote
 					}
 				}
 
-				// the video list under the name bar (search key / click the name): scroll and pick
+				// the video list under the name bar (search key / click the name): folders are playlists, search finds
+				// anything in any folder
+				g_typing = false;
 				if (g_listOpen) {
 					std::scoped_lock lock(g_lock);
 					SetCursorScreenPos(ImVec2{ origin.x + kBarX0 * scale, origin.y + h + 6.0f });
-					const float rows = static_cast<float>(std::min<std::size_t>(g_videoNames.size(), 10));
-					const float listH = std::max(1.0f, rows) * (GetFontSize() + 8.0f) + 12.0f;
-					if (BeginChild("##RealVideosList", ImVec2{ (kBarX1 - kBarX0) * scale, listH }, 0, 0)) {
-						if (g_videoNames.empty()) {
-							TextDisabled("No videos in the video folder");
+					const float rowH = GetFontSize() + 8.0f;
+					const float listW = (kBarX1 - kBarX0) * scale;
+					SetNextItemWidth(listW);
+					InputTextWithHint("##RealVideosSearch", "Search...", g_search, sizeof(g_search));
+					g_typing = IsItemActive();
+					ImVec2 below{};
+					GetCursorScreenPos(&below);
+					SetCursorScreenPos(ImVec2{ origin.x + kBarX0 * scale, below.y + 4.0f });
+
+					const auto lower = [](std::string a_s) {
+						for (auto& ch : a_s) {
+							ch = static_cast<char>(::tolower(static_cast<unsigned char>(ch)));
 						}
-						for (std::size_t i = 0; i < g_videoNames.size(); ++i) {
-							const bool current = view.playing && !view.testPattern &&
-							                     _stricmp(Narrow(std::filesystem::path(g_videoFiles[i]).filename().wstring()).c_str(), view.file.c_str()) == 0;
-							PushID(static_cast<int>(i));
-							if (Selectable(g_videoNames[i].c_str(), current)) {
-								Post(target, [file = g_videoFiles[i]](RE::TESObjectREFR* a_ref) { Manager::Get().RemotePlayFile(a_ref, file); });
+						return a_s;
+					};
+					const std::string query = lower(g_search);
+					const bool        searching = !query.empty();
+
+					// rows: back, subfolders of the browsed folder, then its videos (or every match when searching)
+					struct Row
+					{
+						int         kind;  // 0 back, 1 folder, 2 video
+						std::string label;
+						std::string folder;
+						std::size_t video;
+					};
+					std::vector<Row> rows;
+					if (!searching) {
+						if (!g_browse.empty()) {
+							const auto up = std::filesystem::path(g_browse).parent_path().string();
+							rows.push_back({ 0, "..  back", up, 0 });
+						}
+						std::vector<std::string> subs;
+						for (const auto& f : g_videoFolders) {
+							// the next folder level below the one being browsed
+							if (f.size() <= g_browse.size() || (!g_browse.empty() && (f.compare(0, g_browse.size(), g_browse) != 0 || f[g_browse.size()] != '\\'))) {
+								continue;
+							}
+							const auto rest = f.substr(g_browse.empty() ? 0 : g_browse.size() + 1);
+							const auto name = rest.substr(0, rest.find('\\'));
+							const auto full = g_browse.empty() ? name : g_browse + "\\" + name;
+							if (std::ranges::find(subs, full) == subs.end()) {
+								subs.push_back(full);
+							}
+						}
+						for (const auto& sub : subs) {
+							rows.push_back({ 1, "[+] " + std::filesystem::path(sub).filename().string(), sub, 0 });
+						}
+					}
+					for (std::size_t i = 0; i < g_videoNames.size(); ++i) {
+						if (searching ? lower(g_videoNames[i]).find(query) != std::string::npos : g_videoFolders[i] == g_browse) {
+							rows.push_back({ 2, searching && !g_videoFolders[i].empty() ? g_videoFolders[i] + "  /  " + g_videoNames[i] : g_videoNames[i],
+								g_videoFolders[i], i });
+						}
+					}
+
+					const float listH = std::max(1.0f, static_cast<float>(std::min<std::size_t>(rows.size(), 10))) * rowH + 12.0f;
+					if (BeginChild("##RealVideosList", ImVec2{ listW, listH }, 0, 0)) {
+						if (rows.empty()) {
+							TextDisabled(searching ? "Nothing found" : "No videos in the video folder");
+						}
+						std::string goTo;
+						bool        go = false;
+						for (std::size_t r = 0; r < rows.size(); ++r) {
+							const auto& row = rows[r];
+							PushID(static_cast<int>(r));
+							if (row.kind == 2) {
+								const auto i = row.video;
+								const bool current = view.playing && !view.testPattern && g_videoFolders[i] == view.folder &&
+								                     _stricmp(Narrow(std::filesystem::path(g_videoFiles[i]).filename().wstring()).c_str(), view.file.c_str()) == 0;
+								if (Selectable(row.label.c_str(), current)) {
+									Post(target, [file = g_videoFiles[i]](RE::TESObjectREFR* a_ref) { Manager::Get().RemotePlayFile(a_ref, file); });
+								}
+								if (current && g_scrollToCurrent) {
+									SetScrollHereY(0.5f);
+									g_scrollToCurrent = false;
+								}
+							} else {
+								PushStyleColor(ImGuiCol_Text, row.kind == 1 ? IM_COL32(120, 200, 255, 255) : IM_COL32(170, 170, 170, 255));
+								if (Selectable(row.label.c_str(), false)) {
+									goTo = row.folder;
+									go = true;
+								}
+								PopStyleColor(1);
 							}
 							PopID();
-							if (current && g_scrollToCurrent) {
-								SetScrollHereY(0.5f);
-								g_scrollToCurrent = false;
-							}
+						}
+						if (go) {
+							g_browse = goTo;
 						}
 					}
 					EndChild();
@@ -1080,7 +1164,7 @@ namespace fv::Remote
 		static bool altWas = false;
 		const bool  alt = down(VK_LMENU);
 		if (g_window->BlockUserInput.load()) {
-			if (down('W') || down('A') || down('S') || down('D')) {
+			if (!g_typing.load() && (down('W') || down('A') || down('S') || down('D'))) {  // not while typing a search
 				CursorMode(false);  // start walking right away
 			}
 		} else if (alt && !altWas) {

@@ -104,6 +104,7 @@ namespace fv
 		bool          paused{ false };
 		bool          testPattern{ false };
 		std::string   file;
+		std::string   folder;  // the video's folder inside the video folder ("" = the video folder itself)
 		float         volume{ 1.0f };
 		bool          muted{ false };
 		float         brightness{ 1.0f };
@@ -148,7 +149,8 @@ namespace fv
 
 		// Resolves a Papyrus/INI file name to a full path under the video folder.
 		std::wstring ResolveVideoPath(const std::wstring& a_name) const;
-		std::vector<std::wstring> ListVideos() const;
+		std::vector<std::wstring> ListVideos() const;  // relative to the video folder, subfolders included
+		std::wstring CurrentVideo(RE::TESObjectREFR* a_ref);  // what that screen plays, relative to the video folder
 
 		// Hotkey actions (main thread)
 		void HotkeyPlayNext();

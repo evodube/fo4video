@@ -445,21 +445,35 @@ namespace fv
 		namespace fs = std::filesystem;
 		static constexpr std::array<std::wstring_view, 8> exts{ L".mp4", L".m4v", L".mov", L".wmv", L".avi", L".mkv", L".webm", L".asf" };
 
+		// the video folder and its subfolders (each subfolder is a playlist); paths relative to the video folder
 		std::vector<std::wstring> out;
 		std::error_code           ec;
-		for (const auto& entry : fs::directory_iterator(fs::path(Settings::Get().videoFolder), ec)) {
-			if (!entry.is_regular_file(ec)) {
+		const fs::path            root(Settings::Get().videoFolder);
+		for (fs::recursive_directory_iterator it(root, fs::directory_options::skip_permission_denied, ec), end; !ec && it != end;
+			 it.increment(ec)) {
+			if (it.depth() > 4) {
+				it.disable_recursion_pending();
+			}
+			if (!it->is_regular_file(ec)) {
 				continue;
 			}
-			auto ext = entry.path().extension().wstring();
+			auto ext = it->path().extension().wstring();
 			for (auto& c : ext) {
 				c = static_cast<wchar_t>(::towlower(c));
 			}
 			if (std::ranges::find(exts, std::wstring_view(ext)) != exts.end()) {
-				out.push_back(entry.path().filename().wstring());
+				out.push_back(it->path().lexically_relative(root).wstring());
 			}
 		}
-		std::ranges::sort(out);
+		// videos in a folder first, then its subfolders, everything by name
+		std::ranges::sort(out, [](const std::wstring& a_a, const std::wstring& a_b) {
+			const fs::path pa(a_a), pb(a_b);
+			const auto     fa = pa.parent_path().wstring(), fb = pb.parent_path().wstring();
+			if (fa != fb) {
+				return _wcsicmp(fa.c_str(), fb.c_str()) < 0;
+			}
+			return _wcsicmp(pa.filename().c_str(), pb.filename().c_str()) < 0;
+		});
 		return out;
 	}
 
@@ -1125,27 +1139,27 @@ namespace fv
 		if (!a_ref || RefuseUnsupported(a_ref)) {
 			return;
 		}
-		const auto videos = ListVideos();
+		auto videos = ListVideos();
 		if (videos.empty()) {
 			Notify(std::format("Real Videos: no videos in {}", Narrow(Settings::Get().videoFolder)));
 			return;
 		}
-		// position of what's playing on this screen, else the shared "next video" counter
-		std::ptrdiff_t index = static_cast<std::ptrdiff_t>(_nextVideo % videos.size());
+		// what's playing on this screen: next / previous stay inside its folder (its playlist)
+		const auto current = CurrentVideo(a_ref);
+		if (!current.empty()) {
+			const auto folder = std::filesystem::path(current).parent_path().wstring();
+			std::erase_if(videos, [&](const std::wstring& a_v) { return _wcsicmp(std::filesystem::path(a_v).parent_path().wstring().c_str(), folder.c_str()) != 0; });
+		}
+		std::ptrdiff_t index = static_cast<std::ptrdiff_t>(_nextVideo % std::max<std::size_t>(videos.size(), 1));
 		bool           playing = false;
-		{
-			std::scoped_lock lock(_lock);
-			for (auto& p : _players) {
-				if (Is(*p, a_ref->GetFormID()) && !p->stopping && p->kind == SourceKind::kVideo) {
-					const auto current = std::filesystem::path(p->file).filename().wstring();
-					for (std::size_t i = 0; i < videos.size(); ++i) {
-						if (_wcsicmp(std::filesystem::path(videos[i]).filename().wstring().c_str(), current.c_str()) == 0) {
-							index = static_cast<std::ptrdiff_t>(i);
-							playing = true;
-						}
-					}
-				}
+		for (std::size_t i = 0; i < videos.size(); ++i) {
+			if (_wcsicmp(videos[i].c_str(), current.c_str()) == 0) {
+				index = static_cast<std::ptrdiff_t>(i);
+				playing = true;
 			}
+		}
+		if (videos.empty()) {
+			return;
 		}
 		if (playing) {
 			const auto n = static_cast<std::ptrdiff_t>(videos.size());
@@ -1169,12 +1183,35 @@ namespace fv
 		if (!a_ref || RefuseUnsupported(a_ref)) {
 			return;
 		}
-		const auto videos = ListVideos();
+		auto videos = ListVideos();
 		if (videos.empty()) {
 			Notify(std::format("Real Videos: no videos in {}", Narrow(Settings::Get().videoFolder)));
 			return;
 		}
+		// home: the first video of the folder (playlist) this screen is playing from
+		if (const auto current = CurrentVideo(a_ref); !current.empty()) {
+			const auto folder = std::filesystem::path(current).parent_path().wstring();
+			for (const auto& v : videos) {
+				if (_wcsicmp(std::filesystem::path(v).parent_path().wstring().c_str(), folder.c_str()) == 0) {
+					Play(a_ref, v, Settings::Get().loop);
+					return;
+				}
+			}
+		}
 		Play(a_ref, videos.front(), Settings::Get().loop);
+	}
+
+	std::wstring Manager::CurrentVideo(RE::TESObjectREFR* a_ref)
+	{
+		std::scoped_lock lock(_lock);
+		for (auto& p : _players) {
+			if (a_ref && Is(*p, a_ref->GetFormID()) && !p->stopping && p->kind == SourceKind::kVideo) {
+				std::error_code ec;
+				const auto      root = std::filesystem::absolute(std::filesystem::path(Settings::Get().videoFolder), ec);
+				return std::filesystem::path(p->file).lexically_relative(root).wstring();
+			}
+		}
+		return {};
 	}
 
 	void Manager::RemotePower(RE::TESObjectREFR* a_ref)
@@ -1422,6 +1459,11 @@ namespace fv
 				}
 				v.testPattern = p->kind == SourceKind::kTestPattern;
 				v.file = Narrow(std::filesystem::path(p->file).filename().wstring());
+				{
+					std::error_code ec;
+					const auto      root = std::filesystem::absolute(std::filesystem::path(Settings::Get().videoFolder), ec);
+					v.folder = Narrow(std::filesystem::path(p->file).lexically_relative(root).parent_path().wstring());
+				}
 			}
 		}
 		return v;
