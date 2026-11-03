@@ -633,6 +633,22 @@ namespace fv
 		if (buildMode != _inBuildMode) {
 			log::info("build mode {}: {} the videos", buildMode ? "opened" : "closed", buildMode ? "hiding" : "showing");
 			_inBuildMode = buildMode;
+			for (auto& p : _players) {
+				if (p->stopping) {
+					continue;
+				}
+				if (buildMode) {
+					// the moment build mode opens, before the workshop touches anything: every screen goes back to
+					// exactly how the game made it (own shader and material, back in its group), so the workshop's
+					// highlighting and moving only ever see the original
+					if (p->binding.bound) {
+						Screen::Unbind(p->binding);
+						log::info("{}: back to its original look for build mode", p->name);
+					}
+				} else {
+					p->rebindCooldown = 6;  // put the video back about a second after build mode closes
+				}
+			}
 		}
 
 		// How lit the world is right now, for the back / frame / pole of glowing projector screens: they glow with
