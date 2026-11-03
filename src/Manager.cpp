@@ -1310,7 +1310,7 @@ namespace fv
 						}
 						Compositor::Get().Compose(a_context, slot.compRTV.Get(), slot.compWidth, slot.compHeight, baseSRV, slot.srv.Get(),
 							std::span<const Compositor::Region>(regions.data(), static_cast<std::size_t>(std::clamp(b.faceCount, 0, 2))),
-							pictureBright != 1.0f ? pictureFx : nullptr);
+							pictureBright != 1.0f ? pictureFx : nullptr, b.glowOverlay);
 					}
 					want = slot.compSRV.Get();
 					if (!p.compositeLogged) {

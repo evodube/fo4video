@@ -111,6 +111,7 @@ namespace fv
 		put(L"Screen", L"fBrightness", f(brightness));
 		put(L"Screen", L"bSelfLitScreens", b(selfLit));
 		put(L"Screen", L"bSelfLitLatePass", b(selfLitLatePass));
+		put(L"Screen", L"bSelfLitFaceOnly", b(selfLitFaceOnly));
 		put(L"Screen", L"fSelfLitBrightness", f(selfLitBrightness));
 
 		put(L"Audio", L"bEnableAudio", b(enableAudio));
@@ -170,6 +171,7 @@ namespace fv
 		selfLit = ReadBool(L"Screen", L"bSelfLitScreens", selfLit);
 		selfLitBrightness = std::clamp(ReadFloat(L"Screen", L"fSelfLitBrightness", selfLitBrightness), 0.0f, 4.0f);
 		selfLitLatePass = ReadBool(L"Screen", L"bSelfLitLatePass", selfLitLatePass);
+		selfLitFaceOnly = ReadBool(L"Screen", L"bSelfLitFaceOnly", selfLitFaceOnly);
 		bigScreenBrightness = std::clamp(ReadFloat(L"Screen", L"fBigScreenBrightness", bigScreenBrightness), 0.1f, 4.0f);
 		bigScreenVHS = std::clamp(ReadFloat(L"Screen", L"fBigScreenVHS", bigScreenVHS), 0.0f, 1.0f);
 		startVolume = std::clamp(ReadFloat(L"Audio", L"fStartVolume", startVolume), 0.0f, 2.0f);

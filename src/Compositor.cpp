@@ -12,7 +12,7 @@ cbuffer Params : register(b0)
 	float4 dst;    // x0, y0, x1, y1 in clip space
 	float4 mapU;   // ou, au, bu, -
 	float4 mapV;   // ov, av, bv, -
-	float4 fx;     // brightness, VHS strength (0 = off), time in seconds, -
+	float4 fx;     // brightness, VHS strength (0 = off), time in seconds, 1 = write alpha 0
 };
 Texture2D    tex : register(t0);
 SamplerState smp : register(s0);
@@ -56,7 +56,7 @@ float3 VHS(float2 uv, float s, float t)
 float4 PSMain(VSOut i) : SV_Target
 {
 	float3 c = fx.y > 0.0 ? VHS(i.uv, fx.y, fx.z) : tex.Sample(smp, i.uv).rgb;
-	return float4(saturate(c * fx.x), 1.0);
+	return float4(saturate(c * fx.x), fx.w > 0.5 ? 0.0 : 1.0);
 }
 )";
 
@@ -292,7 +292,7 @@ float4 PSMain(VSOut i) : SV_Target
 		p->fx[0] = a_fx ? a_fx[0] : 1.0f;
 		p->fx[1] = a_fx ? a_fx[1] : 0.0f;
 		p->fx[2] = a_fx ? a_fx[2] : 0.0f;
-		p->fx[3] = 0.0f;
+		p->fx[3] = a_fx ? a_fx[3] : 0.0f;
 		a_context->Unmap(_cb.Get(), 0);
 
 		a_context->PSSetShaderResources(0, 1, &a_srv);
@@ -301,7 +301,8 @@ float4 PSMain(VSOut i) : SV_Target
 	}
 
 	void Compositor::Compose(ID3D11DeviceContext* a_context, ID3D11RenderTargetView* a_target, std::uint32_t a_width, std::uint32_t a_height,
-		ID3D11ShaderResourceView* a_base, ID3D11ShaderResourceView* a_video, std::span<const Region> a_regions, const float* a_fx)
+		ID3D11ShaderResourceView* a_base, ID3D11ShaderResourceView* a_video, std::span<const Region> a_regions, const float* a_fx,
+		bool a_baseSeeThrough)
 	{
 		if (!_ok || !a_target || !a_video) {
 			return;
@@ -334,14 +335,21 @@ float4 PSMain(VSOut i) : SV_Target
 		a_context->VSSetConstantBuffers(0, 1, &cb);
 		a_context->PSSetConstantBuffers(0, 1, &cb);
 
+		const float baseFx[4]{ 1.0f, 0.0f, 0.0f, a_baseSeeThrough ? 1.0f : 0.0f };
 		if (a_base) {
-			Draw(a_context, a_width, a_height, Region{ 0, 0, static_cast<float>(a_width), static_cast<float>(a_height) }, a_base, _clamp.Get(), nullptr);
+			Draw(a_context, a_width, a_height, Region{ 0, 0, static_cast<float>(a_width), static_cast<float>(a_height) }, a_base, _clamp.Get(), baseFx);
 		} else {
-			const float black[4]{ 0, 0, 0, 1 };
+			const float black[4]{ 0, 0, 0, a_baseSeeThrough ? 0.0f : 1.0f };
 			a_context->ClearRenderTargetView(a_target, black);
 		}
+		float videoFx[4]{ 1.0f, 0.0f, 0.0f, 0.0f };
+		if (a_fx) {
+			videoFx[0] = a_fx[0];
+			videoFx[1] = a_fx[1];
+			videoFx[2] = a_fx[2];
+		}
 		for (const auto& region : a_regions) {
-			Draw(a_context, a_width, a_height, region, a_video, _border.Get(), a_fx);
+			Draw(a_context, a_width, a_height, region, a_video, _border.Get(), videoFx);
 		}
 
 		ID3D11ShaderResourceView* nullSRV = nullptr;

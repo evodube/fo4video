@@ -9,6 +9,7 @@ namespace fv::Screen
 		constexpr std::uint16_t kPlaceholderWidth = 4;
 		constexpr std::uint16_t kPlaceholderHeight = 8;
 		constexpr auto          kChoiceIni = "Data\\F4SE\\Plugins\\RealVideos_Screens.ini";
+		constexpr const char*   kGlowName = "RealVideosGlow";
 
 		std::string Str(const RE::BSFixedString& a_str)
 		{
@@ -127,7 +128,7 @@ namespace fv::Screen
 
 			if (auto* geom = a_obj->IsGeometry()) {
 				// editor/idle markers are invisible in game
-				if (IsScreenShader(GetShaderProperty(geom)) && Lower(name).find("marker") == std::string::npos) {
+				if (IsScreenShader(GetShaderProperty(geom)) && Lower(name).find("marker") == std::string::npos && name != kGlowName) {
 					a_out.push_back({ geom, name, Lower(path) });
 				}
 				return;
@@ -1130,9 +1131,10 @@ namespace fv::Screen
 
 	namespace
 	{
-		// A fresh NiAlphaProperty with blending on but ONE/ZERO (opaque): it only moves the screen into the late
+		// A fresh NiAlphaProperty: blending on, ONE/ZERO (opaque, just moves the mesh to the late pass) or
+		// SRC_ALPHA/INV_SRC_ALPHA (see-through where the texture's alpha is 0): it only moves the screen into the late
 		// blended pass. Built by hand like the game does (zeroed object + vtable) since no constructor is exposed.
-		RE::NiAlphaProperty* NewOpaqueBlendAlpha()
+		RE::NiAlphaProperty* NewBlendAlpha(bool a_seeThrough)
 		{
 			auto* mem = static_cast<std::byte*>(RE::aligned_alloc(alignof(RE::NiAlphaProperty), sizeof(RE::NiAlphaProperty)));
 			if (!mem) {
@@ -1144,17 +1146,27 @@ namespace fv::Screen
 			REL::Relocation<std::uint32_t*> objects{ RE::ID::NiRefObject::Objects };
 			::InterlockedIncrement(reinterpret_cast<volatile LONG*>(objects.get()));  // the game's live object count (its dtor lowers it)
 			auto* alpha = reinterpret_cast<RE::NiAlphaProperty*>(mem);
-			// bit 0 blend on, bits 1-4 source = kOne (0), bits 5-8 dest = kZero (1)
-			alpha->flags.flags = static_cast<std::uint16_t>(0x1 | (static_cast<std::uint16_t>(RE::NiAlphaProperty::AlphaFunction::kOne) << 1) |
-															 (static_cast<std::uint16_t>(RE::NiAlphaProperty::AlphaFunction::kZero) << 5));
+			// bit 0 blend on, bits 1-4 source, bits 5-8 destination
+			using AF = RE::NiAlphaProperty::AlphaFunction;
+			const auto src = a_seeThrough ? AF::kSrcAlpha : AF::kOne;
+			const auto dst = a_seeThrough ? AF::kInvSrcAlpha : AF::kZero;
+			alpha->flags.flags = static_cast<std::uint16_t>(0x1 | (static_cast<std::uint16_t>(src) << 1) | (static_cast<std::uint16_t>(dst) << 5));
 			alpha->alphaTestRef = 0;
 			return alpha;
 		}
 
 		// Draw a lit screen with a glowing (effect) shader carrying the video, like a TV, so its brightness doesn't
 		// depend on the time of day or which way it faces. The screen's own property is put back on Unbind.
+		// The original alpha property lets the texture's alpha cut or blend the mesh: then the see-through areas of
+		// the face-only glow would show up on the lit screen too.
+		bool UsesAlpha(RE::BSGeometry* a_geom)
+		{
+			auto* alpha = a_geom ? static_cast<RE::NiAlphaProperty*>(a_geom->properties[0].get()) : nullptr;
+			return alpha && (alpha->GetAlphaBlending() || alpha->GetAlphaTesting());
+		}
+
 		void MakeSelfLit(ScreenBinding& a_binding, RE::BSGeometry* a_geom, RE::BSShaderProperty* a_litProp, RE::BSShaderMaterial* a_litMat,
-			RE::NiTexture* a_slotTexture)
+			RE::NiTexture* a_slotTexture, bool a_faceOnly)
 		{
 			using F = RE::BSShaderProperty::EShaderPropertyFlag;
 			auto* created = RE::BSEffectShaderProperty::Create();
@@ -1198,11 +1210,54 @@ namespace fv::Screen
 			em->falloffStopOpacity = 1.0f;
 			created->SetFlag(F::kGrayscaleToPaletteColor, false);
 			created->SetFlag(F::kGrayscaleToPaletteAlpha, false);
+
+			if (a_faceOnly) {
+				// a copy of the mesh, nudged a hair in front of the video face, glowing only where the video is.
+				// The real screen keeps its own lit shader: its back, frame and pole look exactly as without video.
+				auto* parent = a_geom->parent;
+				RE::NiPointer<RE::NiObject> copyObj(parent ? a_geom->Clone() : nullptr);
+				auto* copy = copyObj ? copyObj->IsGeometry() : nullptr;
+				if (!copy) {
+					log::warn("'{}': couldn't copy the screen for the face-only glow; the whole mesh glows", a_binding.geometryName);
+				} else {
+					created->SetFlag(F::kZBufferWrite, false);
+					RE::NiPointer<RE::NiProperty> alpha(NewBlendAlpha(true));
+					if (!alpha) {
+						return;
+					}
+					copy->properties[0] = alpha;
+					if (!created->SetupGeometry(copy)) {
+						log::warn("'{}': the glowing shader doesn't fit this mesh; staying lit by the world", a_binding.geometryName);
+						return;
+					}
+					copy->properties[1] = keep;
+					copy->name = RE::BSFixedString(kGlowName);
+					RE::NiPoint3 offset{};
+					if (a_binding.haveGlowNormal) {
+						offset = a_binding.glowNormal * 0.3f;  // world units, about 4 mm: no flicker against the real face
+					}
+					copy->local = a_geom->local;
+					const float parentScale = parent->world.scale != 0.0f ? parent->world.scale : 1.0f;
+					copy->local.translate += parent->world.rotate.Transpose() * (offset / parentScale);
+					copy->world = a_geom->world;
+					copy->world.translate += offset;
+					parent->AttachChild(copy, true);
+					a_binding.overlay = RE::NiPointer<RE::NiAVObject>(copy);
+					a_binding.overlayParent = RE::NiPointer<RE::NiNode>(parent);
+					a_binding.glowOverlay = true;
+					a_binding.effectProp = keep;
+					a_binding.effectMaterial = em;
+					a_binding.selfLit = true;
+					RebuildRenderPasses(created);
+					log::info("'{}': only the video face glows", a_binding.geometryName);
+					return;
+				}
+			}
 			// late pass: an effect shader drawn with the opaque world got painted over by whatever stands behind the
 			// screen (the drive-in's catwalk showed through the top of the picture at night)
 			RE::NiPointer<RE::NiProperty> alpha;
 			if (Settings::Get().selfLitLatePass) {
-				alpha = RE::NiPointer<RE::NiProperty>(NewOpaqueBlendAlpha());
+				alpha = RE::NiPointer<RE::NiProperty>(NewBlendAlpha(false));
 			}
 			RE::NiPointer<RE::NiProperty> previousAlpha = a_geom->properties[0];
 			if (alpha) {
@@ -1505,6 +1560,10 @@ namespace fv::Screen
 
 			a_binding.screenAspect = chosen.empty() ? 0.0f : shape.faceAspect[chosen[0]];
 			a_binding.faceCount = static_cast<int>(chosen.size());
+			if (chosen.size() == 1) {
+				a_binding.glowNormal = shape.faceNormal[chosen[0]];
+				a_binding.haveGlowNormal = true;
+			}
 			for (std::size_t i = 0; i < chosen.size() && i < 2; ++i) {
 				const int k = chosen[i];
 				a_binding.faceRects[i] = shape.face[k];
@@ -1583,7 +1642,9 @@ namespace fv::Screen
 
 		a_binding.geometryName = candidates[index].name;
 		if (settings.selfLit && !a_binding.isEffect && !a_binding.classic && geom->IsTriShape()) {
-			MakeSelfLit(a_binding, geom, prop, mat, a_slotTexture);
+			const bool faceOnly = settings.selfLitFaceOnly && a_binding.composite && a_binding.faceCount >= 1 && !UsesAlpha(geom) &&
+			                      !prop->flags.all(RE::BSShaderProperty::EShaderPropertyFlag::kSkinned);
+			MakeSelfLit(a_binding, geom, prop, mat, a_slotTexture, faceOnly);
 		}
 
 		a_binding.owner = candidates[index].owner->GetHandle();
@@ -1642,7 +1703,10 @@ namespace fv::Screen
 			a_binding = {};
 			return;
 		}
-		if (a_binding.selfLit && a_binding.geometry && a_binding.geometry->properties[1].get() == a_binding.effectProp.get()) {
+		if (a_binding.glowOverlay && a_binding.overlay && a_binding.overlayParent && a_binding.overlay->parent == a_binding.overlayParent.get()) {
+			a_binding.overlayParent->DetachChild(a_binding.overlay.get());  // the glowing copy goes away
+		}
+		if (a_binding.selfLit && !a_binding.glowOverlay && a_binding.geometry && a_binding.geometry->properties[1].get() == a_binding.effectProp.get()) {
 			a_binding.geometry->properties[1] = a_binding.originalProp;  // the screen's own (lit) shader back
 			if (a_binding.alphaSwapped && a_binding.geometry->properties[0].get() == a_binding.ourAlpha.get()) {
 				a_binding.geometry->properties[0] = a_binding.originalAlpha;
@@ -1720,7 +1784,10 @@ namespace fv::Screen
 			return false;
 		}
 		auto* prop = GetShaderProperty(geom);
-		if (a_binding.selfLit) {
+		if (a_binding.glowOverlay && (!a_binding.overlay || a_binding.overlay->parent != a_binding.overlayParent.get())) {
+			return false;  // the glowing copy was dropped (3D rebuilt)
+		}
+		if (a_binding.selfLit && !a_binding.glowOverlay) {
 			return prop && prop == a_binding.effectProp.get() && prop->material == a_binding.effectMaterial &&
 			       static_cast<RE::BSEffectShaderMaterial*>(a_binding.effectMaterial)->baseTexture.get() == a_binding.slotTexture.get();
 		}

@@ -63,6 +63,13 @@ namespace fv
 		bool                                alphaSwapped{ false };
 		RE::NiPointer<RE::NiProperty>       originalAlpha;  // whatever alpha property the mesh had (often none)
 		RE::NiPointer<RE::NiProperty>       ourAlpha;
+		// face-only glow: a copy of the screen mesh drawn just in front of it that glows only where the video is
+		// (the rest of the copy is see-through), so the back and the frame/pole stay lit by the world
+		bool                                glowOverlay{ false };
+		RE::NiPointer<RE::NiAVObject>       overlay;
+		RE::NiPointer<RE::NiNode>           overlayParent;
+		bool                                haveGlowNormal{ false };
+		RE::NiPoint3                        glowNormal{};  // world-space outward normal of the video face
 	};
 
 	namespace Screen
