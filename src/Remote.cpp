@@ -672,25 +672,71 @@ namespace fv::Remote
 			return rest.substr(0, rest.find('\\'));
 		}
 
-		bool PanelBegin(const char* a_id, const char* a_title, ImVec2 a_pos, ImVec2 a_size, bool& a_open)
+		// The side panels wear the remote's look: same dark body and corner rounding, keys coloured like the
+		// remote's buttons (lighter on hover / press), the accent blue for what's playing, and the remote's opacity.
+		constexpr ImU32 kDim = IM_COL32(140, 140, 146, 255);
+		constexpr int   kPanelColors = 21;
+		constexpr int   kPanelVars = 10;
+		float           g_panelFont = 1.0f;  // font scale of the panel text (child lists don't inherit it)
+
+		bool PanelBegin(const char* a_id, const char* a_title, ImVec2 a_pos, ImVec2 a_size, bool& a_open, float a_scale)
 		{
+			const auto px = [&](float a_v, float a_min) { return std::max(a_min, a_v * a_scale); };
 			SetNextWindowPos(a_pos, ImGuiCond_Always, ImVec2{ 0.0f, 0.0f });
 			SetNextWindowSize(a_size, ImGuiCond_Always);
 			PushStyleColor(ImGuiCol_WindowBg, kBack);
-			PushStyleVar(ImGuiStyleVar_WindowRounding, 12.0f);
+			PushStyleColor(ImGuiCol_ChildBg, IM_COL32(0, 0, 0, 0));
+			PushStyleColor(ImGuiCol_Border, kBack);
+			PushStyleColor(ImGuiCol_Text, kText);
+			PushStyleColor(ImGuiCol_TextDisabled, kDim);
+			PushStyleColor(ImGuiCol_FrameBg, kKey);
+			PushStyleColor(ImGuiCol_FrameBgHovered, kKeyHover);
+			PushStyleColor(ImGuiCol_FrameBgActive, kKeyDown);
+			PushStyleColor(ImGuiCol_Button, kKey);
+			PushStyleColor(ImGuiCol_ButtonHovered, kKeyHover);
+			PushStyleColor(ImGuiCol_ButtonActive, kKeyDown);
+			PushStyleColor(ImGuiCol_Header, kKey);
+			PushStyleColor(ImGuiCol_HeaderHovered, kKeyHover);
+			PushStyleColor(ImGuiCol_HeaderActive, kKeyDown);
+			PushStyleColor(ImGuiCol_Separator, kKey);
+			PushStyleColor(ImGuiCol_ScrollbarBg, IM_COL32(0, 0, 0, 0));
+			PushStyleColor(ImGuiCol_ScrollbarGrab, kKey);
+			PushStyleColor(ImGuiCol_ScrollbarGrabHovered, kKeyHover);
+			PushStyleColor(ImGuiCol_ScrollbarGrabActive, kKeyDown);
+			PushStyleColor(ImGuiCol_TextSelectedBg, IM_COL32(120, 200, 255, 90));
+			PushStyleColor(ImGuiCol_NavHighlight, IM_COL32(0, 0, 0, 0));
+			PushStyleVar(ImGuiStyleVar_Alpha, std::max(0.4f, g_opacity));
+			PushStyleVar(ImGuiStyleVar_WindowRounding, 28.0f * a_scale);
+			PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+			PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{ px(48.0f, 10.0f), px(44.0f, 10.0f) });
+			PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2{ px(24.0f, 6.0f), px(16.0f, 4.0f) });
+			PushStyleVar(ImGuiStyleVar_FrameRounding, px(14.0f, 4.0f));
+			PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2{ px(20.0f, 6.0f), px(14.0f, 4.0f) });
+			PushStyleVar(ImGuiStyleVar_ScrollbarSize, px(26.0f, 8.0f));
+			PushStyleVar(ImGuiStyleVar_ScrollbarRounding, px(13.0f, 4.0f));
+			PushStyleVar(ImGuiStyleVar_GrabRounding, px(13.0f, 4.0f));
 			const bool shown = Begin(a_id, nullptr,
 				ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
-					ImGuiWindowFlags_NoSavedSettings);
+					ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar);
 			if (shown) {
+				// text sized like the remote's (its name bar), never smaller than the game's menu text
+				const float body = std::clamp(44.0f * a_scale / std::max(1.0f, GetFontSize()), 1.0f, 3.0f);
+				SetWindowFontScale(body * 1.3f);
 				Text("%s", a_title);
+				SetWindowFontScale(body);
+				g_panelFont = body;
 				SameLine();
-				const float hideW = 70.0f;
-				SetCursorPosX(std::max(GetCursorPosX(), a_size.x - hideW - 12.0f));
+				ImVec2 ts{};
+				CalcTextSize(&ts, "Hide", nullptr, false, -1.0f);
+				const float hideW = ts.x + px(48.0f, 12.0f);
+				ImVec2      avail{};
+				GetContentRegionAvail(&avail);
+				SetCursorPosX(GetCursorPosX() + std::max(0.0f, avail.x - hideW));
 				if (Button("Hide", ImVec2{ hideW, 0.0f })) {
 					a_open = false;
 					SaveState();
 				}
-				Separator();
+				Dummy(ImVec2{ 0.0f, px(6.0f, 2.0f) });
 			}
 			return shown;
 		}
@@ -698,8 +744,21 @@ namespace fv::Remote
 		void PanelEnd()
 		{
 			End();
-			PopStyleVar(1);
-			PopStyleColor(1);
+			PopStyleVar(kPanelVars);
+			PopStyleColor(kPanelColors);
+		}
+
+		// a list row; the one playing is drawn in the remote's accent blue, like its play key
+		bool PanelRow(const char* a_label, bool a_current)
+		{
+			if (a_current) {
+				PushStyleColor(ImGuiCol_Text, kAccent);
+			}
+			const bool clicked = Selectable(a_label, a_current);
+			if (a_current) {
+				PopStyleColor(1);
+			}
+			return clicked;
 		}
 
 		void SidePanels(std::uint32_t a_target, const RemoteView& a_view, float a_scale)
@@ -719,7 +778,7 @@ namespace fv::Remote
 			// Videos: search bar on top, matching videos below (videos only, never folders)
 			g_typing = false;
 			if (g_listOpen) {
-				if (PanelBegin("##RealVideosVideos", "Videos", ImVec2{ g_remoteRect.x - panelW - gap, g_remoteRect.y }, size, g_listOpen)) {
+				if (PanelBegin("##RealVideosVideos", "Videos", ImVec2{ g_remoteRect.x - panelW - gap, g_remoteRect.y }, size, g_listOpen, a_scale)) {
 					SetNextItemWidth(-1.0f);
 					InputTextWithHint("##RealVideosSearch", "Search videos...", g_search, sizeof(g_search));
 					g_typing = IsItemActive();
@@ -730,13 +789,14 @@ namespace fv::Remote
 					}
 					TextDisabled("%zu video%s", found, found == 1 ? "" : "s");
 					if (BeginChild("##RealVideosResults", ImVec2{ 0.0f, 0.0f }, 0, 0)) {
+						SetWindowFontScale(g_panelFont);
 						for (std::size_t i = 0; i < g_videoNames.size(); ++i) {
 							if (!query.empty() && LowerAscii(g_videoNames[i]).find(query) == std::string::npos) {
 								continue;
 							}
 							PushID(static_cast<int>(i));
 							const bool current = isCurrent(i);
-							if (Selectable(g_videoNames[i].c_str(), current)) {
+							if (PanelRow(g_videoNames[i].c_str(), current)) {
 								play(i);
 							}
 							if (const auto pl = PlaylistOf(g_videoFolders[i]); !pl.empty()) {
@@ -758,7 +818,7 @@ namespace fv::Remote
 			// Playlists: every folder in Videos\\Playlists; play from the start, or unfold and pick a video
 			if (g_playlistsOpen) {
 				if (PanelBegin("##RealVideosPlaylists", "Playlists", ImVec2{ g_remoteRect.x + g_remoteRect.z + gap, g_remoteRect.y }, size,
-						g_playlistsOpen)) {
+						g_playlistsOpen, a_scale)) {
 					std::vector<std::string> names;
 					for (const auto& f : g_videoFolders) {
 						if (auto pl = PlaylistOf(f); !pl.empty() && std::ranges::find(names, pl) == names.end()) {
@@ -766,6 +826,7 @@ namespace fv::Remote
 						}
 					}
 					if (BeginChild("##RealVideosPlaylistList", ImVec2{ 0.0f, 0.0f }, 0, 0)) {
+						SetWindowFontScale(g_panelFont);
 						if (names.empty()) {
 							TextWrapped("No playlists yet. Make folders in your video folder's Playlists folder, e.g. "
 										"Data\\Videos\\Playlists\\Horror, and put videos in them.");
@@ -787,7 +848,7 @@ namespace fv::Remote
 							auto       it = std::ranges::find(g_openPlaylists, name);
 							const bool unfolded = it != g_openPlaylists.end();
 							const auto label = std::format("{} {}", unfolded ? "v" : ">", name);
-							if (Selectable(label.c_str(), playing == name)) {
+							if (PanelRow(label.c_str(), playing == name)) {
 								if (unfolded) {
 									g_openPlaylists.erase(it);
 								} else {
@@ -795,18 +856,18 @@ namespace fv::Remote
 								}
 							}
 							if (unfolded) {
-								Indent(24.0f);
+								Indent(std::max(16.0f, 60.0f * a_scale));
 								for (std::size_t i = 0; i < g_videoNames.size(); ++i) {
 									if (PlaylistOf(g_videoFolders[i]) != name) {
 										continue;
 									}
 									PushID(static_cast<int>(i) + 100000);
-									if (Selectable(g_videoNames[i].c_str(), isCurrent(i))) {
+									if (PanelRow(g_videoNames[i].c_str(), isCurrent(i))) {
 										play(i);
 									}
 									PopID();
 								}
-								Unindent(24.0f);
+								Unindent(std::max(16.0f, 60.0f * a_scale));
 							}
 							PopID();
 						}
