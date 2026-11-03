@@ -97,6 +97,7 @@ namespace fv
 		put(L"General", L"bOnlySupportedScreens", b(onlySupportedScreens));
 		put(L"General", L"bAimToSelect", b(aimToSelect));
 		put(L"General", L"fAimDistance", f(aimDistance));
+		put(L"General", L"iKeyRemote", i(keyRemote));
 
 		put(L"Screen", L"iSRGB", i(srgb));
 		put(L"Screen", L"iAspectMode", i(aspectMode));

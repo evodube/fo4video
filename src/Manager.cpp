@@ -802,7 +802,7 @@ namespace fv
 		if (Screen::IsSupported(a_ref, &what)) {
 			return false;
 		}
-		log::info("{}: {}; F9/F10 ignored (bOnlySupportedScreens=1)", Screen::RefName(a_ref), what);
+		log::info("{}: {}; ignored (bOnlySupportedScreens=1)", Screen::RefName(a_ref), what);
 		Notify("Real Videos: that isn't a TV, projector or cinema screen");
 		return true;
 	}
@@ -858,8 +858,16 @@ namespace fv
 			Notify("Real Videos: aim at a TV, projector or cinema screen first");
 			return;
 		}
-		Screen::Dump(ref.get());
-		Notify(std::format("Real Videos: node dump of {} written to RealVideos.log", Screen::RefName(ref.get())));
+		DumpScreen(ref.get());
+	}
+
+	void Manager::DumpScreen(RE::TESObjectREFR* a_ref)
+	{
+		if (!a_ref) {
+			return;
+		}
+		Screen::Dump(a_ref);
+		Notify(std::format("Real Videos: details of {} written to RealVideos.log", Screen::RefName(a_ref)));
 	}
 
 	RE::NiPointer<RE::TESObjectREFR> Manager::Target()
@@ -1133,10 +1141,19 @@ namespace fv
 	// a_mode: 0 = next mesh of this object, 1 = next orientation, 2 = next screen of a nearby object, 3 = other side
 	void Manager::HotkeyNextMesh(int a_mode)
 	{
-		const bool a_flip = a_mode == 1 || a_mode == 3;
 		auto ref = PickedRef();
 		if (!ref) {
 			Notify("Real Videos: aim at a screen first");
+			return;
+		}
+		FixScreen(ref.get(), a_mode);
+	}
+
+	void Manager::FixScreen(RE::TESObjectREFR* a_target, int a_mode)
+	{
+		const bool a_flip = a_mode == 1 || a_mode == 3;
+		RE::NiPointer<RE::TESObjectREFR> ref(a_target);
+		if (!ref) {
 			return;
 		}
 
@@ -1150,7 +1167,7 @@ namespace fv
 				}
 			}
 			if (!player || !_slots[player->slot].niTexture) {
-				message = "Real Videos: play something on it first (F10 or F9)";
+				message = "Real Videos: start a video on it first";
 			} else if (a_mode == 2 && Screen::CountCandidates(ref.get()) <= Screen::CountOwnCandidates(ref.get())) {
 				message = "Real Videos: no other screens nearby";
 			} else {
@@ -1208,7 +1225,8 @@ namespace fv
 			return;
 		}
 
-		const std::array<int, 6> keys{ s.keyPlay, s.keyTestPattern, s.keyStop, s.keyDump, s.keyNextMesh, s.keyRemote };
+		// only the remote has a key now; everything else is on the remote and the "Now playing" page
+		const std::array<int, 6> keys{ 0, 0, 0, 0, 0, s.keyRemote };
 		for (std::size_t i = 0; i < keys.size(); ++i) {
 			if (keys[i] <= 0) {
 				continue;

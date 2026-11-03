@@ -70,6 +70,13 @@ namespace fv::Remote
 			g_videoNames = std::move(names);
 		}
 
+		void Tip(const char* a_text)
+		{
+			if (IsItemHovered()) {
+				SetTooltip("%s", a_text);
+			}
+		}
+
 		// One screen's controls (shared by the remote window and the "Now playing" page).
 		void Controls(std::uint32_t a_formID, bool a_withPicker)
 		{
@@ -127,6 +134,34 @@ namespace fv::Remote
 						}
 					}
 					EndCombo();
+				}
+
+				// what the F7 / F8 keys used to do
+				if (v.playing && TreeNode("Fix this screen")) {
+					if (Button("Next mesh")) {
+						Post(a_formID, [](RE::TESObjectREFR* a_ref) { Manager::Get().FixScreen(a_ref, 0); });
+					}
+					Tip("The video is on the wrong part of the object: try the next one.");
+					SameLine();
+					if (Button("Nearby screen")) {
+						Post(a_formID, [](RE::TESObjectREFR* a_ref) { Manager::Get().FixScreen(a_ref, 2); });
+					}
+					Tip("Show it on a screen next to this object instead (switches, projectors that light up a separate screen).");
+					if (Button("Turn / flip")) {
+						Post(a_formID, [](RE::TESObjectREFR* a_ref) { Manager::Get().FixScreen(a_ref, 1); });
+					}
+					Tip("Upside down, mirrored or sideways: each press tries the next way round. Remembered for this screen.");
+					SameLine();
+					if (Button("Other side")) {
+						Post(a_formID, [](RE::TESObjectREFR* a_ref) { Manager::Get().FixScreen(a_ref, 3); });
+					}
+					Tip("Two-sided screens: put the picture on the other side.");
+					SameLine();
+					if (Button("Write details to the log")) {
+						Post(a_formID, [](RE::TESObjectREFR* a_ref) { Manager::Get().DumpScreen(a_ref); });
+					}
+					Tip("For troubleshooting: what this screen is made of, into RealVideos.log.");
+					TreePop();
 				}
 			}
 			PopID();
@@ -632,12 +667,6 @@ namespace fv::Remote
 
 		// ---- settings page in the framework's menu ----
 
-		void Tip(const char* a_text)
-		{
-			if (IsItemHovered()) {
-				SetTooltip("%s", a_text);
-			}
-		}
 
 		bool Percent(const char* a_label, float* a_value, float a_max, const char* a_tip)
 		{
@@ -685,7 +714,7 @@ namespace fv::Remote
 			Tip("Off: hotkeys and the remote use the object clicked in the console.");
 			dirty |= Meters("How far you can aim", &s.aimDistance, 400.0f, "Screens further away than this aren't picked by aiming.");
 			dirty |= Checkbox("Only TVs, projectors and the cinema", &s.onlySupportedScreens);
-			Tip("Off: F9/F10 work on any object (posters, signs...).");
+			Tip("Off: the remote works on any object (posters, signs...).");
 
 			SeparatorText("Picture");
 			bool bars = s.aspectMode == 1;
@@ -780,7 +809,50 @@ namespace fv::Remote
 					::WritePrivateProfileStringA("Remote", "Y", nullptr, kStateIni);
 				}
 			}
-			TextDisabled("Keys: remote F6, play/next F9, test pattern F10, stop F11, mesh F7, log F8 (change them in RealVideos.ini)");
+			{
+				static bool waiting = false;
+				const auto  keyName = [](int a_vk) {
+					char      name[64]{};
+					const UINT scan = ::MapVirtualKeyA(static_cast<UINT>(a_vk), MAPVK_VK_TO_VSC);
+					LONG       lparam = static_cast<LONG>(scan << 16);
+					if (a_vk == VK_INSERT || a_vk == VK_DELETE || a_vk == VK_HOME || a_vk == VK_END || a_vk == VK_PRIOR || a_vk == VK_NEXT ||
+						(a_vk >= VK_LEFT && a_vk <= VK_DOWN)) {
+						lparam |= 1 << 24;  // extended key
+					}
+					if (a_vk > 0 && ::GetKeyNameTextA(lparam, name, sizeof(name)) > 0) {
+						return std::string(name);
+					}
+					return a_vk > 0 ? std::format("key {:#x}", a_vk) : std::string("none");
+				};
+				if (waiting) {
+					Text("Remote key: press a key... (Esc = cancel)");
+					for (int vk = 0x08; vk <= 0xFE; ++vk) {
+						if (vk == VK_SHIFT || vk == VK_CONTROL || vk == VK_MENU || (vk >= VK_LSHIFT && vk <= VK_RMENU) || vk == VK_LWIN ||
+							vk == VK_RWIN) {
+							continue;
+						}
+						if ((::GetAsyncKeyState(vk) & 1) != 0) {
+							if (vk != VK_ESCAPE) {
+								s.keyRemote = vk;
+								dirty = true;
+								s.Save();  // keep it for next time straight away
+							}
+							waiting = false;
+							break;
+						}
+					}
+				} else {
+					Text("Remote key: %s", keyName(s.keyRemote).c_str());
+					SameLine();
+					if (Button("Change")) {
+						for (int vk = 0x08; vk <= 0xFE; ++vk) {
+							(void)::GetAsyncKeyState(vk);  // forget earlier presses
+						}
+						waiting = true;
+					}
+					Tip("Click, then press the key that should open and close the remote. Saved right away.");
+				}
+			}
 
 			Separator();
 			if (Button("Save to RealVideos.ini")) {

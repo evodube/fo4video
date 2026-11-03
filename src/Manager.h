@@ -133,6 +133,9 @@ namespace fv
 		void HotkeyStop();
 		void HotkeyDump();
 		void HotkeyNextMesh(int a_mode);
+		// the "Fix this screen" buttons: 0 next mesh, 1 turn/flip, 2 nearby screens, 3 other side
+		void FixScreen(RE::TESObjectREFR* a_ref, int a_mode);
+		void DumpScreen(RE::TESObjectREFR* a_ref);
 
 		// --- render thread ---
 		void OnPresent(ID3D11Device* a_device, ID3D11DeviceContext* a_context);
