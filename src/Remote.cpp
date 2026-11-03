@@ -762,6 +762,49 @@ namespace fv::Remote
 		// While the remote is open: give the keyboard back to the game for walking (the menu framework tells the
 		// game to ignore keyboard and mouse), but switch off looking, attacking, activating, menus and the rest
 		// with an input-enable layer, so the mouse only drives the remote.
+		// --- W/A/S/D allowlist ---------------------------------------------------------------------------------
+		// The menu framework swallows every window message while its mouse-taking windows are open. W/A/S/D
+		// key messages (and raw keyboard input for those keys) are handed straight to the game's own window
+		// procedure instead, past the framework, while the remote is open.
+		WNDPROC g_nextProc = nullptr;
+		WNDPROC g_gameProc = nullptr;
+
+		bool IsWalkKey(WPARAM a_vk) { return a_vk == 'W' || a_vk == 'A' || a_vk == 'S' || a_vk == 'D'; }
+
+		LRESULT CALLBACK RemoteWndProc(HWND a_wnd, UINT a_msg, WPARAM a_w, LPARAM a_l)
+		{
+			if (g_window && g_window->IsOpen.load() && g_gameProc) {
+				if ((a_msg == WM_KEYDOWN || a_msg == WM_KEYUP) && IsWalkKey(a_w)) {
+					return ::CallWindowProcW(g_gameProc, a_wnd, a_msg, a_w, a_l);
+				}
+				if (a_msg == WM_INPUT) {
+					RAWINPUT raw{};
+					UINT     size = sizeof(raw);
+					if (::GetRawInputData(reinterpret_cast<HRAWINPUT>(a_l), RID_INPUT, &raw, &size, sizeof(RAWINPUTHEADER)) != static_cast<UINT>(-1) &&
+						raw.header.dwType == RIM_TYPEKEYBOARD && IsWalkKey(raw.data.keyboard.VKey)) {
+						return ::CallWindowProcW(g_gameProc, a_wnd, a_msg, a_w, a_l);
+					}
+				}
+			}
+			return ::CallWindowProcW(g_nextProc, a_wnd, a_msg, a_w, a_l);
+		}
+
+		void InstallWalkKeys()  // main thread
+		{
+			static bool done = false;
+			if (done) {
+				return;
+			}
+			const HWND wnd = ::GetActiveWindow();
+			if (!wnd) {
+				return;
+			}
+			done = true;
+			g_gameProc = reinterpret_cast<WNDPROC>(::GetClassLongPtrW(wnd, GCLP_WNDPROC));
+			g_nextProc = reinterpret_cast<WNDPROC>(::SetWindowLongPtrW(wnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(&RemoteWndProc)));
+			log::info("remote: W/A/S/D reach the game while the remote is open");
+		}
+
 		void GameInputForRemote(bool a_open)
 		{
 			using UE = RE::UserEvents::USER_EVENT_FLAG;
@@ -796,9 +839,39 @@ namespace fv::Remote
 				if (auto* controls = RE::ControlMap::GetSingleton()) {
 					controls->ignoreKeyboardMouse = false;  // the framework set it when the remote opened
 				}
-			} else if (layer && blocked) {
-				inputs->EnableUserEvent(layer->layerID, flags, true, RE::UserEvents::SENDER_ID::kGameplay);
-				blocked = false;
+				InstallWalkKeys();
+
+				// and drive the walk directly too, in case the game still doesn't see the keys
+				static bool walking = false;
+				auto        down = [](int a_vk) { return (::GetAsyncKeyState(a_vk) & 0x8000) != 0; };
+				float       y = (down('W') ? 1.0f : 0.0f) - (down('S') ? 1.0f : 0.0f);
+				float       x = (down('D') ? 1.0f : 0.0f) - (down('A') ? 1.0f : 0.0f);
+				if (x != 0.0f && y != 0.0f) {
+					x *= 0.7071f;
+					y *= 0.7071f;
+				}
+				auto* pc = RE::PlayerControls::GetSingleton();
+				if (pc && (x != 0.0f || y != 0.0f || walking)) {
+					pc->data.moveInputVec = RE::NiPoint2(x, y);
+					walking = x != 0.0f || y != 0.0f;
+				}
+
+				// what the game sees, every ~2 s while the remote is open (for the log)
+				static int frame = 0;
+				if (++frame % 120 == 1) {
+					auto* ui = RE::UI::GetSingleton();
+					auto* cm = RE::ControlMap::GetSingleton();
+					log::info("remote: menuMode={} ignoreKeyboardMouse={} W held={} move=({:.2f},{:.2f})", ui ? ui->menuMode : 0u,
+						cm ? cm->ignoreKeyboardMouse : false, down('W'), pc ? pc->data.moveInputVec.x : 0.0f, pc ? pc->data.moveInputVec.y : 0.0f);
+				}
+			} else {
+				if (layer && blocked) {
+					inputs->EnableUserEvent(layer->layerID, flags, true, RE::UserEvents::SENDER_ID::kGameplay);
+					blocked = false;
+				}
+				if (auto* pc = RE::PlayerControls::GetSingleton()) {
+					pc->data.moveInputVec = RE::NiPoint2(0.0f, 0.0f);  // stop walking when the remote closes
+				}
 			}
 		}
 	}
