@@ -1,0 +1,270 @@
+=====================================================================
+MOD NAME
+=====================================================================
+Real Videos - Actual Video Playback on TVs, Projectors and the Drive-In
+
+
+=====================================================================
+SHORT DESCRIPTION (Nexus summary box, under 350 characters)
+=====================================================================
+Fallout 4's TVs can finally play actual videos. Drop MP4, MKV, WebM, AVI, MOV or WMV files into Data\Videos and watch them with sound on any TV, on Videos of the Wasteland projectors and on Rebuild's drive-in cinema. It comes with an in-game remote, playlists, directional audio, an old-film look and save-game support.
+
+
+=====================================================================
+LONG DESCRIPTION (paste into the Description tab - BBCode)
+=====================================================================
+
+[center][size=6][b]REAL VIDEOS[/b][/size]
+[size=4]Actual videos with sound on Fallout 4's TVs, projectors and the drive-in cinema[/size][/center]
+
+[line]
+
+[size=5][b]What is this?[/b][/size]
+For ten years every TV in the Commonwealth has looped the same static and test pattern. Video mods could only fake it with flipbook textures, animated GIF-style frame sheets or a few seconds of low-res footage baked into a mesh.
+
+[b]Real Videos plays actual video files.[/b] Your own movies, episodes, music videos or old newsreels play in full motion at their real frame rate, with real sound coming from the screen. There are no frame sheets, no conversion to textures and no file size limits. Put a video in a folder, aim at a TV and press F6.
+
+It is an F4SE plugin. The videos are decoded by Windows itself, either on your graphics card or on the CPU, and drawn straight onto the screen's mesh in the world.
+
+[line]
+
+[size=5][b]Features[/b][/size]
+[list]
+[*][b]Real video playback[/b] at the video's own frame rate, with audio, on:
+[list]
+[*]every vanilla TV
+[*]projectors and projector screens from [b]Videos of the Wasteland[/b]
+[*]the drive-in cinema screen from [b]Rebuild[/b]
+[/list]
+[*][b]Up to 20 screens playing at once[/b] (10 by default), each playing its own video, volume and brightness.
+[*][b]In-game remote[/b] (F6) for the screen under your crosshair:
+[list]
+[*]play / pause, rewind and fast forward (10 s)
+[*]previous / next video, home, volume up / down, mute, power
+[*]a seek bar with the time, and a brightness sun (25-100%)
+[*]an ALL button that turns every screen nearby on or off
+[/list]
+[*][b]Video search and playlists[/b] in side panels next to the remote.
+[*][b]Directional sound:[/b] audio comes from the screen's direction and fades with distance. The drive-in has its own much larger hearing range.
+[*][b]GPU decoding[/b] with automatic CPU fallback, plus [b]per-screen resolution caps[/b] (TVs 480p by default, projectors and cinema 1080p) to keep performance up.
+[*][b]Smart pausing:[/b] screens you're not looking at, or are far from, pause their picture and sound.
+[*][b]Turning off when you walk away:[/b] screens you leave behind turn off to free memory, then resume at the same spot when you come back.
+[*][b]Saved with your game:[/b] screens remember their video and position across saves and loads (F4SE co-save).
+[*][b]Old film look[/b] for the drive-in (on by default) and projectors (off by default), each with its own sliders:
+[list]
+[*]grain, scratches and dust, flicker
+[*]dark corners, faded sepia colours
+[*]projector shake, softness
+[/list]
+[*][b]Projector screens lit by the world:[/b] the frame darkens at night and brightens in daylight, while the picture itself glows.
+[*][b]A full settings page[/b] in-game. Nothing needs editing by hand, although the INI is documented line by line if you prefer.
+[*][b]Papyrus API[/b] for modders: Play, Stop, StopAll, IsPlaying, SetVolume and more (source included).
+[/list]
+
+[line]
+
+[size=5][b]Supported video formats[/b][/size]
+Videos are decoded by [b]Windows Media Foundation[/b], the same system the Windows Films & TV app uses. Any file Windows itself can play will work.
+
+[b]File types:[/b] [b].mp4  .m4v  .mov  .mkv  .webm  .avi  .wmv  .asf[/b]
+
+[list]
+[*][b]Best choice: MP4 with H.264 video and AAC audio.[/b] It plays on every Windows install with no extra codecs and decodes fastest.
+[*][b]HEVC (H.265), VP9 and AV1[/b] work if the matching free codec extension from the Microsoft Store is installed: [i]HEVC Video Extensions[/i], [i]VP9 Video Extensions[/i] and [i]AV1 Video Extension[/i].
+[*]Any resolution works. Large videos are scaled down while decoding to the cap you set for each kind of screen.
+[*]If a file won't play, re-encode it to H.264/AAC MP4 with HandBrake (the "Fast 1080p30" preset is fine).
+[/list]
+
+[line]
+
+[size=5][b]How to use[/b][/size]
+[list=1]
+[*]Install the mod and its requirements with your mod manager.
+[*]Put your videos in [b]Data\Videos[/b]. In MO2 you can make a separate mod folder containing [i]Videos\[/i] so it stays in the virtual Data folder.
+[*][b]Playlists:[/b] put videos in a folder like [b]Data\Videos\Playlists\Saturday Night[/b]. It shows up in the remote's Playlists panel. Next / previous stay inside that playlist. Any other subfolder also groups its videos together.
+[*]In game, [b]aim at a TV, projector screen or the drive-in screen and press F6[/b] to open the remote.
+[*]Pick a video from the search panel, or press play.
+[*]Press [b]W/A/S/D[/b] with the remote open to walk around with it still on screen. Press Left Alt or F6 to get the cursor back, and Esc or F6 to close it.
+[/list]
+
+[line]
+
+[size=5][b]Settings[/b][/size]
+Every setting is in game on the remote's [b]Settings[/b] page, saved to [i]Data\F4SE\Plugins\RealVideos.ini[/i]. Distances are shown in metres.
+
+[b]Playback[/b]
+[list]
+[*]Loop videos
+[*]Pause in menus (Esc, Pip-Boy, loading...)
+[*]Pause when the game is in the background (alt-tab)
+[*]Screens playing at once (1-20, default 10)
+[*]Show messages (playing, paused, off)
+[*]"All screens here" reaches (default 150 m)
+[/list]
+
+[b]Performance[/b]
+[list]
+[*]Cinema video size / TV video size / Projector video size (default 1080p / 480p / 1080p, or full size)
+[*]Decode videos on the graphics card (default on)
+[*]Cinema: pause when far away or out of view (further than 150 m, for longer than 10 s)
+[*]Cinema: turn off when you walk away (further than 300 m, for longer than 30 s)
+[*]TVs, Projectors: pause when far away or out of view (further than 50 m, for longer than 10 s)
+[*]TVs, Projectors: turn off when you walk away (further than 100 m, for longer than 30 s)
+[/list]
+
+[b]Picking a screen[/b]
+[list]
+[*]Use the screen under the crosshair
+[*]How far you can aim (default 200 m)
+[*]Only TVs, projectors and the cinema
+[/list]
+
+[b]Picture[/b]
+[list]
+[*]Keep the video's shape (black bars)
+[*]Projector and cinema screens glow like TVs
+[*]Glowing screens: draw after the world
+[*]Projectors: frame lit by the world
+[*]Cinema: stretch to fill the screen
+[*]Cinema brightness
+[*]Projectors: stretch to fill the screen
+[*]Projectors: draw the video only inside the screen
+[*]Two-sided screens: show on both sides
+[*]Stop the screen's own animation while playing
+[*]Hide glowing layers over the screen
+[*]Cinema: old film look and Projectors: old film look, each with Grain, Scratches and dust, Flicker, Dark corners, Faded colours (sepia), Shake and Softness
+[*]Colours: Auto / Linear / sRGB
+[*]Apply to the screens playing now
+[/list]
+
+[b]Sound[/b]
+[list]
+[*]Sound on
+[*]Sound comes from the screen's direction
+[*]Master volume
+[*]Volume a screen starts at (default 50%)
+[*]TVs & projectors: full volume up to / can't be heard past
+[*]Cinema: full volume up to / can't be heard past
+[*]How it fades between the two
+[/list]
+
+[b]Remote[/b]
+[list]
+[*]Remote opacity, Remote size
+[*]Lock the remote in place
+[*]Move the remote back to the right side
+[*]Remote key (press Change, then any key; default F6)
+[/list]
+
+[b]Now playing page[/b] (for the screen you're aiming at)
+[list]
+[*]Position, volume and brightness sliders
+[*]All screens here on / off
+[*][b]Fix this screen[/b]: Next mesh, Nearby screen, Turn / flip, Other side, and Write details to the log. Use these if a modded TV shows the video on the wrong part, upside down or on the back.
+[/list]
+
+[line]
+
+[size=5][b]Requirements[/b][/size]
+[list]
+[*][b]Fallout 4 1.10.163[/b] ("Old Gen"). The plugin is also built for Next-Gen (1.10.984) and Anniversary (1.11.x) with the matching F4SE. Reports from NG/AE players are welcome.
+[*][b]F4SE[/b] (Fallout 4 Script Extender) for your game version
+[*][b]Address Library for F4SE Plugins[/b]
+[*][b]F4SE Menu Framework[/b] for the remote and the settings page
+[*]Windows 10 or 11
+[/list]
+
+[size=5][b]Recommended[/b][/size]
+[list]
+[*][b]Videos of the Wasteland[/b]: placeable projectors and projector screens. Real Videos plays on all of them.
+[*][b]Rebuild[/b]: its drive-in cinema screen becomes a working outdoor cinema with its own sound range and film look.
+[*][b]HEVC / VP9 / AV1 Video Extensions[/b] (Microsoft Store) if your videos use those codecs
+[*][b]HandBrake[/b] (free) for converting videos to H.264 MP4
+[/list]
+
+[line]
+
+[size=5][b]Installation[/b][/size]
+[list]
+[*]Install with Mod Organizer 2 or Vortex, after the requirements.
+[*]No plugin (.esp) is needed, so it doesn't use a load order slot.
+[*]Safe to add mid-playthrough.
+[*]To uninstall, remove the mod. Saves made with it load fine without it, and the co-save data is simply ignored.
+[/list]
+
+[line]
+
+[size=5][b]Compatibility[/b][/size]
+[list]
+[*]Works with any mod that adds or replaces TVs, as long as the screen uses a normal TV screen mesh. If one looks wrong, use [b]Fix this screen[/b] on the Now playing page.
+[*]Settlement building works normally. Screens playing in build mode come back as they were.
+[*]No vanilla records are edited.
+[/list]
+
+[line]
+
+[size=5][b]FAQ[/b][/size]
+[b]A video won't play / the screen stays black.[/b]
+Make sure it's in Data\Videos and that Windows can play it in the Films & TV / Media Player app. If not, install the codec extension or convert it to H.264 MP4.
+
+[b]Performance dropped with several screens running.[/b]
+Lower the TV video size, keep "Decode videos on the graphics card" on, and lower "Screens playing at once". Paused and turned-off screens cost nothing.
+
+[b]Can I hear the drive-in from far away?[/b]
+Yes. Raise "Cinema: can't be heard past" on the Sound settings.
+
+[b]Does it work with my modded TV?[/b]
+Most likely. Use "Next mesh" or "Turn / flip" under Fix this screen if the picture lands in the wrong place.
+
+[b]Where are my videos supposed to go in MO2?[/b]
+Create an empty mod, add a [i]Videos[/i] folder inside it, put the files there and enable it.
+
+[line]
+
+[size=5][b]Credits & Thanks[/b][/size]
+[list]
+[*][b]The F4SE team[/b], for the Fallout 4 Script Extender
+[*][b]The CommonLibF4 developers and Dear-Modding[/b], for the library this plugin is built on
+[*][b]The F4SE Menu Framework author[/b], for making in-game menus possible
+[*][b]The Address Library for F4SE Plugins author[/b]
+[*][b]The authors of Videos of the Wasteland and Rebuild[/b], for screens worth playing films on
+[*][b]Bethesda[/b], for Fallout 4 and the Creation Kit
+[*]Everyone who tested early builds and reported bugs
+[/list]
+
+[line]
+
+[size=5][b]License[/b][/size]
+Real Videos is open source under the [b]GNU General Public License v3.0 (GPL-3.0)[/b].
+You may use, study, modify and redistribute it, including in your own mods. Any modified version you distribute must also be released under GPL-3.0 with its source code available, and must credit the original.
+Source code: [url=https://github.com/evodube/fo4video]github.com/evodube/fo4video[/url]
+
+[b]Videos are not included.[/b] Only use videos you have the right to use. Do not upload copyrighted films as part of a mod.
+
+[line]
+
+[center][size=4][b]Turn on a TV. It finally shows something.[/b][/size][/center]
+
+
+=====================================================================
+PERMISSIONS TAB (Nexus "Permissions and credits" fields)
+=====================================================================
+Upload permission:      Yes, under the terms of GPL-3.0 (source must stay available, credit required)
+Modification permission: Yes, under GPL-3.0
+Conversion permission:  Yes, under GPL-3.0
+Asset use permission:   Yes, under GPL-3.0
+Asset use in mods sold on Bethesda.net / paid mods: No
+Asset use in donation points: Yes
+Author notes: Open source, GPL-3.0. Source at github.com/evodube/fo4video. Pull requests welcome.
+
+
+=====================================================================
+FILE DESCRIPTION (Files tab, main file)
+=====================================================================
+Real Videos 0.58: F4SE plugin, INI, Papyrus source and screen textures. Requires F4SE, Address Library and F4SE Menu Framework. Put your videos in Data\Videos.
+
+
+=====================================================================
+TAGS TO PICK
+=====================================================================
+Gameplay, Immersion, Settlement, Audio, User Interface, F4SE, Utilities
