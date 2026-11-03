@@ -70,6 +70,10 @@ namespace fv
 		RE::NiPointer<RE::NiNode>           overlayParent;
 		bool                                haveGlowNormal{ false };
 		RE::NiPoint3                        glowNormal{};  // world-space outward normal of the video face
+		// a glowing screen inside an ordered-rendering group is lifted out of it while it plays (see IsOrderedNode)
+		RE::NiPointer<RE::NiNode>           liftedFrom;
+		RE::NiPointer<RE::NiNode>           liftedTo;
+		RE::NiTransform                     liftedLocal{};
 	};
 
 	namespace Screen

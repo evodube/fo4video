@@ -1181,6 +1181,38 @@ namespace fv::Screen
 			return alpha && (alpha->GetAlphaBlending() || alpha->GetAlphaTesting());
 		}
 
+		// Hang a mesh under another node without moving it in the world.
+		void Rehang(RE::BSGeometry* a_geom, RE::NiNode* a_to, const RE::NiTransform* a_local)
+		{
+			RE::NiPointer<RE::BSGeometry> hold(a_geom);  // detaching drops the parent's reference
+			const RE::NiTransform        world = a_geom->world;
+			if (auto* from = a_geom->parent) {
+				from->DetachChild(a_geom);
+			}
+			if (a_local) {
+				a_geom->local = *a_local;
+			} else {
+				const auto& A = a_to->world;
+				const float s = A.scale != 0.0f ? A.scale : 1.0f;
+				const auto  inv = A.rotate.Transpose();
+				a_geom->local.rotate = inv * world.rotate;
+				a_geom->local.translate = inv * ((world.translate - A.translate) / s);
+				a_geom->local.scale = world.scale / s;
+			}
+			a_geom->world = world;
+			a_to->AttachChild(a_geom, true);
+		}
+
+		// Put a lifted screen back into its ordered group, in its old place.
+		void Unlift(ScreenBinding& a_binding, RE::BSGeometry* a_geom)
+		{
+			if (a_binding.liftedFrom && a_geom && a_geom->parent == a_binding.liftedTo.get()) {
+				Rehang(a_geom, a_binding.liftedFrom.get(), &a_binding.liftedLocal);
+			}
+			a_binding.liftedFrom.reset();
+			a_binding.liftedTo.reset();
+		}
+
 		void MakeSelfLit(ScreenBinding& a_binding, RE::BSGeometry* a_geom, RE::BSShaderProperty* a_litProp, RE::BSShaderMaterial* a_litMat,
 			RE::NiTexture* a_slotTexture, bool a_faceOnly)
 		{
@@ -1293,8 +1325,24 @@ namespace fv::Screen
 			}
 			// late pass: an effect shader drawn with the opaque world got painted over by whatever stands behind the
 			// screen (the drive-in's catwalk showed through the top of the picture at night)
+			// A blended mesh inside an ordered-rendering group (VotW screens) dragged its neighbours (metal posts, frame)
+			// into the late pass, where they came out bright: the screen is lifted out of the group while it glows.
+			const bool latePass = Settings::Get().selfLitLatePass;
+			if (latePass && IsOrderedNode(a_geom->parent)) {
+				RE::NiNode* host = a_geom->parent;
+				while (host && host->parent && IsOrderedNode(host)) {
+					host = host->parent;
+				}
+				if (host && host != a_geom->parent && !IsOrderedNode(host)) {
+					a_binding.liftedFrom = RE::NiPointer<RE::NiNode>(a_geom->parent);
+					a_binding.liftedTo = RE::NiPointer<RE::NiNode>(host);
+					a_binding.liftedLocal = a_geom->local;
+					Rehang(a_geom, host, nullptr);
+					log::info("'{}': lifted out of its ordered group (now under '{}') while it glows", a_binding.geometryName, Str(host->name));
+				}
+			}
 			RE::NiPointer<RE::NiProperty> alpha;
-			if (Settings::Get().selfLitLatePass && !IsOrderedNode(a_geom->parent)) {
+			if (latePass && !IsOrderedNode(a_geom->parent)) {
 				alpha = RE::NiPointer<RE::NiProperty>(NewBlendAlpha(false));
 			}
 			RE::NiPointer<RE::NiProperty> previousAlpha = a_geom->properties[0];
@@ -1303,6 +1351,7 @@ namespace fv::Screen
 			}
 			if (!created->SetupGeometry(a_geom)) {
 				a_geom->properties[0] = previousAlpha;
+				Unlift(a_binding, a_geom);
 				log::warn("'{}': the glowing shader doesn't fit this mesh; staying lit by the world", a_binding.geometryName);
 				return;
 			}
@@ -1755,6 +1804,7 @@ namespace fv::Screen
 				RebuildRenderPasses(own);
 			}
 		}
+		Unlift(a_binding, a_binding.geometry.get());  // back into its ordered group
 
 		auto* prop = GetShaderProperty(a_binding.geometry.get());
 		if (prop && prop->material == a_binding.material && a_binding.material) {

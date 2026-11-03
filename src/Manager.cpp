@@ -654,7 +654,23 @@ namespace fv
 				direct = lum(d.r, d.g, d.b);
 			}
 			// a surface gets the ambient plus, on average, about half the sun (it isn't always facing it)
-			const float target = std::clamp((ambient + 0.5f * direct) * settings.frameLight, 0.0f, 1.0f);
+			// day / night adjustment: full day 8-17, full night before 5 and after 20, blended in between (indoors: halfway)
+			float day = 0.5f;
+			if (!(cell && cell->IsInterior())) {
+				day = 0.0f;
+				if (auto* cal = RE::Calendar::GetSingleton(); cal && cal->gameHour) {
+					const float h = cal->gameHour->GetValue();
+					if (h >= 8.0f && h <= 17.0f) {
+						day = 1.0f;
+					} else if (h > 5.0f && h < 8.0f) {
+						day = (h - 5.0f) / 3.0f;
+					} else if (h > 17.0f && h < 20.0f) {
+						day = (20.0f - h) / 3.0f;
+					}
+				}
+			}
+			const float boost = settings.frameNight + (settings.frameDay - settings.frameNight) * day;
+			const float target = std::clamp((ambient + 0.5f * direct) * boost, 0.0f, 1.0f);
 			// ease towards it so lightning flashes and weather changes don't make the frame flicker
 			static float smooth = -1.0f;
 			smooth = smooth < 0.0f ? target : smooth + (target - smooth) * 0.05f;
