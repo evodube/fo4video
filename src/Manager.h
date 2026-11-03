@@ -74,6 +74,11 @@ namespace fv
 		std::atomic<float> brightness{ 1.0f };     // this screen's own brightness from the remote (1 = as is)
 		std::atomic<bool>  brightenable{ false };  // projector / cinema screen (TVs stay as they are)
 		std::uint64_t      framesShown{ 0 };
+		std::uint32_t      openHeight{ 0 };      // the size cap the video was opened with (for reopening it)
+		std::chrono::steady_clock::time_point mediaSince{};  // when the video was ready
+		int                gpuMisses{ 0 };        // GPU frames in a row that couldn't be drawn
+		bool               gpuMissLogged{ false };
+		bool               noPictureLogged{ false };
 		int                rebindCooldown{ 0 };
 		RE::ObjectRefHandle workshop;      // the settlement (workbench) the screen is in, if any
 		bool               workshopChecked{ false };
@@ -201,6 +206,8 @@ namespace fv
 		bool                _playerWorkshopKnown{ false };
 		std::vector<Sleeper> _sleepers;
 		RemoteView ViewLocked(std::uint32_t a_formID);
+		void       OpenMedia(Player* a_target, std::uint64_t a_serial, bool a_audio, bool a_gpu);
+		void       FallBackToCpuLocked(Player& a_player, const std::string& a_why);
 		std::mutex                                   _viewLock;   // the remote's last known views (its UI thread never waits on _lock)
 		std::unordered_map<std::uint32_t, RemoteView> _viewCache;
 		std::vector<RemoteView>                      _viewsCache;

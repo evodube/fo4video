@@ -40,7 +40,8 @@ namespace fv
 			bool                         tried{ false };
 			bool                         ok{ false };
 		};
-		GpuDecode g_gpu;
+		GpuDecode         g_gpu;
+		std::atomic<bool> g_gpuDisabled{ false };
 
 		bool EnsureGpuDecode()
 		{
@@ -80,6 +81,11 @@ namespace fv
 			log::info("GPU decoding ready");
 			return true;
 		}
+	}
+
+	void MediaSource::DisableGpu()
+	{
+		g_gpuDisabled = true;
 	}
 
 	void MediaSource::SetGameDevice(ID3D11Device* a_device)
@@ -123,7 +129,7 @@ namespace fv
 			return false;
 		}
 		ComScope com;
-		_gpu = a_gpu && EnsureGpuDecode();
+		_gpu = a_gpu && !g_gpuDisabled && EnsureGpuDecode();
 
 		if (!OpenVideo(a_path, a_maxHeight)) {
 			return false;

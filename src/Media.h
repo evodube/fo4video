@@ -32,6 +32,7 @@ namespace fv
 		static bool StartupMF();
 		// The game's device: GPU decoding uses its own device on the same graphics card.
 		static void SetGameDevice(ID3D11Device* a_device);
+		static void DisableGpu();  // GPU decoding didn't work on this PC: every video from now on decodes on the CPU
 
 		// a_maxHeight > 0: bigger videos are scaled down to this height while decoding (less work everywhere after).
 		bool Open(const std::wstring& a_path, bool a_wantAudio, std::uint32_t a_maxHeight = 0, bool a_gpu = false);

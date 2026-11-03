@@ -678,51 +678,9 @@ namespace fv
 			const auto height = static_cast<std::uint32_t>(std::max(0, maxH));
 			const auto serial = player->serial = _nextSerial++;
 			Player*    target = player.get();
+			target->openHeight = height;
 			// opened in the background (see Opener); the screen shows its dark placeholder until the video is ready
-			openJob = [this, target, serial, file = a_file, audio, height, gpu, refName]() {
-				const auto alive = [&]() {
-					return std::ranges::any_of(_players, [&](const auto& p) { return p.get() == target && p->serial == serial && !p->stopping; });
-				};
-				{
-					std::scoped_lock lock(_lock);
-					if (!alive()) {
-						return;  // stopped before its turn came
-					}
-				}
-				auto media = std::make_unique<MediaSource>();
-				if (!media->Open(file, audio, height, gpu)) {
-					NotifyLater(std::format("Real Videos: could not decode {}", Narrow(std::filesystem::path(file).filename().wstring())));
-					std::scoped_lock lock(_lock);
-					if (alive()) {
-						StopLocked(*target);
-					}
-					return;
-				}
-				// carry on from the saved spot here too: seeking costs as much as opening
-				std::int64_t startAt = 0;
-				bool         paused = false;
-				{
-					std::scoped_lock lock(_lock);
-					if (!alive()) {
-						return;
-					}
-					startAt = target->seekDelta.exchange(0);
-					paused = target->userPaused.load();
-				}
-				media->SetPaused(paused);
-				if (startAt > 0) {
-					media->Seek(startAt);  // starts it too
-				} else {
-					media->Start();
-				}
-				std::scoped_lock lock(_lock);
-				if (alive()) {
-					target->media = std::move(media);
-					log::info("{}: video ready", refName);
-				} else {
-					std::thread([m = std::move(media)]() mutable { m.reset(); }).detach();
-				}
-			};
+			openJob = [this, target, serial, audio, gpu]() { OpenMedia(target, serial, audio, gpu); };
 			// another screen already playing this video: start in step with it
 			if (settings.syncSameVideo && a_startAt == 0) {
 				std::scoped_lock lock(_lock);
@@ -758,6 +716,81 @@ namespace fv
 			NotifyInfo(std::format("Real Videos: test pattern on {}", refName));
 		}
 		return true;
+	}
+
+	// Runs on the Opener thread. a_target may be gone by then (stopped, replaced): it is only used while it is still
+	// in _players with the same serial.
+	void Manager::OpenMedia(Player* a_target, std::uint64_t a_serial, bool a_audio, bool a_gpu)
+	{
+		const auto alive = [&]() {
+			return std::ranges::any_of(_players, [&](const auto& p) { return p.get() == a_target && p->serial == a_serial && !p->stopping; });
+		};
+		std::wstring  file;
+		std::string   name;
+		std::uint32_t height = 0;
+		{
+			std::scoped_lock lock(_lock);
+			if (!alive()) {
+				return;  // stopped before its turn came
+			}
+			file = a_target->file;
+			name = a_target->name;
+			height = a_target->openHeight;
+		}
+		auto media = std::make_unique<MediaSource>();
+		if (!media->Open(file, a_audio, height, a_gpu)) {
+			NotifyLater(std::format("Real Videos: could not decode {}", Narrow(std::filesystem::path(file).filename().wstring())));
+			std::scoped_lock lock(_lock);
+			if (alive()) {
+				StopLocked(*a_target);
+			}
+			return;
+		}
+		// carry on from the saved spot here too: seeking costs as much as opening
+		std::int64_t startAt = 0;
+		bool         paused = false;
+		{
+			std::scoped_lock lock(_lock);
+			if (!alive()) {
+				return;
+			}
+			startAt = a_target->seekDelta.exchange(0);
+			paused = a_target->userPaused.load();
+		}
+		media->SetPaused(paused);
+		if (startAt > 0) {
+			media->Seek(startAt);  // starts it too
+		} else {
+			media->Start();
+		}
+		std::scoped_lock lock(_lock);
+		if (alive()) {
+			a_target->media = std::move(media);
+			a_target->mediaSince = std::chrono::steady_clock::now();
+			a_target->gpuMisses = 0;
+			a_target->gpuMissLogged = false;
+			a_target->noPictureLogged = false;
+			log::info("{}: video ready ({})", name, a_target->media->OnGpu() ? "GPU decoding" : "CPU decoding");
+		} else {
+			std::thread([m = std::move(media)]() mutable { m.reset(); }).detach();
+		}
+	}
+
+	// The graphics card path doesn't work on this PC (some overlays / wrappers / drivers can't share the decoder's
+	// pictures with the game). Called with _lock held: this video, and every one after it, decodes on the CPU instead.
+	void Manager::FallBackToCpuLocked(Player& a_player, const std::string& a_why)
+	{
+		if (!a_player.media || !a_player.media->OnGpu()) {
+			return;
+		}
+		log::warn("{}: GPU decoding isn't working here ({}); switching to CPU decoding for this session", a_player.name, a_why);
+		MediaSource::DisableGpu();
+		a_player.seekDelta = a_player.media->Clock();  // carry on from the same spot
+		std::thread([m = std::move(a_player.media)]() mutable { m.reset(); }).detach();
+		a_player.gpuIn.clear();
+		Opener::Get().Add([this, target = &a_player, serial = a_player.serial, audio = Settings::Get().enableAudio]() {
+			OpenMedia(target, serial, audio, false);
+		});
 	}
 
 	bool Manager::Play(RE::TESObjectREFR* a_ref, const std::wstring& a_file, bool a_loop)
@@ -1958,8 +1991,36 @@ namespace fv
 						sd.Texture2D.MipLevels = 1;
 						a_device->CreateShaderResourceView(in.texture.Get(), &sd, &view);
 					}
-					if (view && in.mutex && Compositor::Get().Ready(a_device) && slot.Ensure(a_device, tw, th, srgb, true) &&
-						in.mutex->AcquireSync(1, 0) == S_OK) {
+					// why a GPU frame couldn't be drawn (logged once; after a run of failures: CPU decoding instead)
+					const char* miss = nullptr;
+					HRESULT     syncHr = S_OK;
+					if (!in.texture) {
+						miss = "the game can't open the decoder's shared texture";
+					} else if (!in.mutex) {
+						miss = "the shared texture has no keyed mutex";
+					} else if (!view) {
+						miss = "couldn't make a view of the shared texture";
+					} else if (!Compositor::Get().Ready(a_device)) {
+						miss = "the compositor isn't available";
+					} else if (!slot.Ensure(a_device, tw, th, srgb, true)) {
+						miss = "couldn't make the screen's texture";
+					} else if ((syncHr = in.mutex->AcquireSync(1, 0)) != S_OK) {
+						miss = "the decoder's picture wasn't ready to read";
+					}
+					if (miss) {
+						++p.gpuMisses;
+						if (!p.gpuMissLogged) {
+							p.gpuMissLogged = true;
+							log::warn("{}: GPU frame not drawn: {} (0x{:08X})", p.name, miss, static_cast<std::uint32_t>(syncHr));
+						}
+						if (p.gpuMisses >= 30) {
+							p.media->RecycleFrame(std::move(frame));
+							FallBackToCpuLocked(p, miss);
+							continue;
+						}
+					}
+					if (!miss) {
+						p.gpuMisses = 0;
 						const float offX = static_cast<float>((tw - frame.width) / 2), offY = static_cast<float>((th - frame.height) / 2);
 						const Compositor::Region where{ offX, offY, offX + static_cast<float>(frame.width), offY + static_cast<float>(frame.height) };
 						Compositor::Get().Compose(a_context, slot.rtv.Get(), slot.width, slot.height, nullptr, view.Get(),
@@ -1986,6 +2047,17 @@ namespace fv
 						vh = frame.height;
 					}
 					p.media->RecycleFrame(std::move(frame));
+				}
+				// nothing on screen 5 s after the video was ready (and it isn't paused): say why we know of, and if the
+				// graphics card path is in use, switch this and later videos to CPU decoding
+				if (p.media && p.framesShown == 0 && !held && !frozen && !p.noPictureLogged &&
+					std::chrono::steady_clock::now() - p.mediaSince > std::chrono::seconds(5)) {
+					p.noPictureLogged = true;
+					log::warn("{}: no picture 5 s after the video was ready ({} decoding, {} GPU frames not drawn)", p.name,
+						p.media->OnGpu() ? "GPU" : "CPU", p.gpuMisses);
+					if (p.media->OnGpu()) {
+						FallBackToCpuLocked(p, p.gpuMisses ? "its frames couldn't be drawn" : "the decoder sent no frames");
+					}
 				}
 			}
 			if (vw) {
