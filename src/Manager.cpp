@@ -620,7 +620,7 @@ namespace fv
 			                   player->binding.bigScreen ? settings.maxHeightCinema :
 			                                               settings.maxHeightProjector;
 			player->media = std::make_unique<MediaSource>();
-			if (!player->media->Open(a_file, settings.enableAudio, static_cast<std::uint32_t>(std::max(0, maxH)), settings.gpuDecode)) {
+			if (!player->media->Open(a_file, settings.enableAudio, static_cast<std::uint32_t>(std::max(0, maxH)), settings.gpuDecode && !Compositor::Get().Failed())) {
 				Notify(std::format("Real Videos: could not decode {}", Narrow(std::filesystem::path(a_file).filename().wstring())));
 				Screen::Unbind(player->binding);
 				releaseSlot();

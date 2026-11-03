@@ -85,8 +85,8 @@ float3 OldFilm(float2 uv, float t)
 	[unroll] for (int k = 0; k < 3; ++k) {
 		if (Hash(float2(frame * 0.37, k * 11.0 + 2.0)) < 0.35 * film.y) {
 			const float x = Hash(float2(floor(frame / 6.0), k * 5.3 + 1.0));
-			const float line = 1.0 - smoothstep(0.0, 0.0012, abs(uv.x - x));
-			c = lerp(c, float3(0.82, 0.80, 0.74), line * 0.55);
+			const float scratch = 1.0 - smoothstep(0.0, 0.0012, abs(uv.x - x));
+			c = lerp(c, float3(0.82, 0.80, 0.74), scratch * 0.55);
 		}
 	}
 	if (Hash(floor(uv * float2(240.0, 135.0)) + frame * 7.31) > 1.0 - 0.0025 * film.y) {

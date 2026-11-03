@@ -20,6 +20,8 @@ namespace fv
 		static Compositor& Get();
 
 		bool Ready(ID3D11Device* a_device);
+		// true once it has been tried and failed (GPU decoding then stays off: it needs the compositor)
+		bool Failed() const { return _tried && !_ok; }
 
 		void Compose(ID3D11DeviceContext* a_context, ID3D11RenderTargetView* a_target, std::uint32_t a_width, std::uint32_t a_height,
 			ID3D11ShaderResourceView* a_base, ID3D11ShaderResourceView* a_video, std::span<const Region> a_regions,
