@@ -22,12 +22,13 @@ namespace fv
 		bool Ready(ID3D11Device* a_device);
 
 		void Compose(ID3D11DeviceContext* a_context, ID3D11RenderTargetView* a_target, std::uint32_t a_width, std::uint32_t a_height,
-			ID3D11ShaderResourceView* a_base, ID3D11ShaderResourceView* a_video, std::span<const Region> a_regions);
+			ID3D11ShaderResourceView* a_base, ID3D11ShaderResourceView* a_video, std::span<const Region> a_regions,
+			const float* a_fx = nullptr);  // a_fx: brightness, VHS strength, time (seconds) for the video regions
 
 	private:
 		bool Init(ID3D11Device* a_device);
 		void Draw(ID3D11DeviceContext* a_context, std::uint32_t a_width, std::uint32_t a_height, const Region& a_region,
-			ID3D11ShaderResourceView* a_srv, ID3D11SamplerState* a_sampler);
+			ID3D11ShaderResourceView* a_srv, ID3D11SamplerState* a_sampler, const float* a_fx);
 
 		ComPtr<ID3D11VertexShader>      _vs;
 		ComPtr<ID3D11PixelShader>       _ps;

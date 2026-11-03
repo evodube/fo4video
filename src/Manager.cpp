@@ -647,7 +647,8 @@ namespace fv
 				const float gain = big ? Attenuate(dist, settings.bigMinDistance, settings.bigMaxDistance, settings.falloffCurve)
 				                       : Attenuate(dist, settings.minDistance, settings.maxDistance, settings.falloffCurve);
 				const auto& pr = _prefs[p->formID];
-				volume = pr.muted ? 0.0f : settings.volume * p->userVolume * pr.volume * gain;
+				const float screenVolume = pr.volume < 0.0f ? settings.startVolume : pr.volume;
+				volume = pr.muted ? 0.0f : settings.volume * p->userVolume * screenVolume * gain;
 			}
 			p->volume = volume;
 		}
@@ -864,8 +865,11 @@ namespace fv
 		std::scoped_lock lock(_lock);
 		RemoteView v;
 		v.formID = a_formID;
+		v.volume = Settings::Get().startVolume;
 		if (auto it = _prefs.find(a_formID); it != _prefs.end()) {
-			v.volume = it->second.volume;
+			if (it->second.volume >= 0.0f) {
+				v.volume = it->second.volume;
+			}
 			v.muted = it->second.muted;
 		}
 		for (auto& p : _players) {
@@ -1041,6 +1045,7 @@ namespace fv
 		if (settings.enableHotkeys) {
 			PollHotkeys();
 		}
+		Remote::Tick();
 		if (_frame % 10 == 0) {
 			ScheduleMaintain();
 		}
@@ -1156,6 +1161,17 @@ namespace fv
 							baseSRV ? "original" : "black");
 					}
 				}
+			}
+
+			// 3) big screens (the drive-in): brighter, with the VHS tape look, redrawn every frame (the tape noise moves)
+			const bool filtered = !composite && b.bound && b.bigScreen && (settings.bigScreenBrightness != 1.0f || settings.bigScreenVHS > 0.0f) &&
+			                      Compositor::Get().Ready(a_device);
+			if (filtered && slot.srv && slot.width && slot.height && slot.EnsureComposite(a_device, slot.width, slot.height, srgb)) {
+				const float fx[4]{ settings.bigScreenBrightness, settings.bigScreenVHS, static_cast<float>(std::fmod(seconds, 3600.0)), 0.0f };
+				const Compositor::Region whole{ 0.0f, 0.0f, static_cast<float>(slot.compWidth), static_cast<float>(slot.compHeight) };
+				Compositor::Get().Compose(a_context, slot.compRTV.Get(), slot.compWidth, slot.compHeight, nullptr, slot.srv.Get(),
+					std::span<const Compositor::Region>(&whole, 1), fx);
+				want = slot.compSRV.Get();
 			}
 
 			slot.Patch(p.slot, want);

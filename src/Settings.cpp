@@ -123,6 +123,9 @@ namespace fv
 		falloffCurve = std::clamp(ReadFloat(L"Audio", L"fFalloffCurve", falloffCurve), 0.25f, 8.0f);
 		bigScreenRadius = ReadFloat(L"Audio", L"fBigScreenSize", bigScreenRadius);
 		bigScreenStretch = ReadBool(L"Screen", L"bStretchOnBigScreens", bigScreenStretch);
+		bigScreenBrightness = std::clamp(ReadFloat(L"Screen", L"fBigScreenBrightness", bigScreenBrightness), 0.1f, 4.0f);
+		bigScreenVHS = std::clamp(ReadFloat(L"Screen", L"fBigScreenVHS", bigScreenVHS), 0.0f, 1.0f);
+		startVolume = std::clamp(ReadFloat(L"Audio", L"fStartVolume", startVolume), 0.0f, 2.0f);
 		bigMinDistance = ReadFloat(L"Audio", L"fBigScreenMinDistance", bigMinDistance);
 		bigMaxDistance = std::max(ReadFloat(L"Audio", L"fBigScreenMaxDistance", bigMaxDistance), bigMinDistance + 1.0f);
 

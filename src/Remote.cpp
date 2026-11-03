@@ -150,11 +150,44 @@ namespace fv::Remote
 			kHome,
 			kSearch,
 			kName,
-			kClose
+			kClose,
+			kLock
 		};
 
 		bool g_listOpen = false;
 		bool g_scrollToCurrent = false;
+
+		// position / lock (saved in RealVideos_Screens.ini [Remote])
+		constexpr auto kStateIni = "Data\\F4SE\\Plugins\\RealVideos_Screens.ini";
+		bool           g_stateLoaded = false;
+		bool           g_locked = false;
+		bool           g_havePos = false;
+		ImVec2         g_pos{};
+		bool           g_dragging = false;
+		ImVec2         g_grab{};
+
+		void LoadState()
+		{
+			if (g_stateLoaded) {
+				return;
+			}
+			g_stateLoaded = true;
+			g_locked = ::GetPrivateProfileIntA("Remote", "Locked", 0, kStateIni) != 0;
+			char x[32]{}, y[32]{};
+			::GetPrivateProfileStringA("Remote", "X", "", x, sizeof(x), kStateIni);
+			::GetPrivateProfileStringA("Remote", "Y", "", y, sizeof(y), kStateIni);
+			if (x[0] && y[0]) {
+				g_pos = ImVec2{ static_cast<float>(std::atof(x)), static_cast<float>(std::atof(y)) };
+				g_havePos = true;
+			}
+		}
+
+		void SaveState()
+		{
+			::WritePrivateProfileStringA("Remote", "Locked", g_locked ? "1" : "0", kStateIni);
+			::WritePrivateProfileStringA("Remote", "X", std::format("{:.0f}", g_pos.x).c_str(), kStateIni);
+			::WritePrivateProfileStringA("Remote", "Y", std::format("{:.0f}", g_pos.y).c_str(), kStateIni);
+		}
 
 		struct Canvas
 		{
@@ -203,6 +236,9 @@ namespace fv::Remote
 			}
 			if (a_x >= kDesignW - 70 && a_y <= 70) {
 				return Key::kClose;
+			}
+			if (a_x <= 90 && a_y <= 90) {
+				return Key::kLock;
 			}
 			return Key::kNone;
 		}
@@ -312,6 +348,18 @@ namespace fv::Remote
 				ImDrawListManager::AddText(dl, GetFont(), size, ImVec2{ mid.x - ts.x * scale * 0.5f, mid.y - ts.y * scale * 0.5f }, kText, text.c_str());
 			}
 
+			// lock (top left): closed = the remote stays put, open = drag it by any empty spot
+			{
+				const ImU32 col = a_hover == Key::kLock ? kText : g_locked ? IM_COL32(150, 150, 150, 255) : kAccent;
+				ImDrawListManager::AddRectFilled(dl, c.P(26, 44), c.P(66, 76), col, 4.0f * c.s, 0);
+				const float sx = g_locked ? 46.0f : 58.0f;  // open: shackle swung up and to the right
+				const float sy = g_locked ? 44.0f : 36.0f;
+				ImDrawListManager::PathArcTo(dl, c.P(sx, sy), 13 * c.s, 3.1415926f, 6.2831853f, 20);
+				ImDrawListManager::PathStroke(dl, col, 0, 6 * c.s);
+				Line(c, sx - 13, sy, sx - 13, g_locked ? 46.0f : 30.0f, 6, col);
+				Line(c, sx + 13, sy, sx + 13, 46.0f, 6, col);
+			}
+
 			// small close mark
 			Line(c, kDesignW - 52, 22, kDesignW - 22, 52, 6, a_hover == Key::kClose ? kText : IM_COL32(110, 110, 110, 255));
 			Line(c, kDesignW - 22, 22, kDesignW - 52, 52, 6, a_hover == Key::kClose ? kText : IM_COL32(110, 110, 110, 255));
@@ -364,6 +412,10 @@ namespace fv::Remote
 					g_window->IsOpen = false;
 				}
 				break;
+			case Key::kLock:
+				g_locked = !g_locked;
+				SaveState();
+				break;
 			default:
 				break;
 			}
@@ -377,8 +429,15 @@ namespace fv::Remote
 			const float scale = viewport->Size.y * 0.5f / kDesignH;
 			const float w = kDesignW * scale, h = kDesignH * scale;
 
-			SetNextWindowPos(ImVec2{ viewport->Pos.x + viewport->Size.x * 0.80f, viewport->Pos.y + viewport->Size.y * 0.5f }, ImGuiCond_Appearing,
-				ImVec2{ 0.5f, 0.5f });
+			LoadState();
+			if (!g_havePos) {
+				g_pos = ImVec2{ viewport->Pos.x + viewport->Size.x * 0.80f - w * 0.5f, viewport->Pos.y + viewport->Size.y * 0.5f - h * 0.5f };
+				g_havePos = true;
+			}
+			// keep it on screen (resolution changes, old saved spot)
+			g_pos.x = std::clamp(g_pos.x, viewport->Pos.x - w * 0.5f, viewport->Pos.x + viewport->Size.x - w * 0.5f);
+			g_pos.y = std::clamp(g_pos.y, viewport->Pos.y, viewport->Pos.y + viewport->Size.y - h * 0.25f);
+			SetNextWindowPos(g_pos, ImGuiCond_Always, ImVec2{ 0.0f, 0.0f });
 			PushStyleColor(ImGuiCol_WindowBg, kBack);
 			PushStyleColor(ImGuiCol_ChildBg, kKey);
 			PushStyleColor(ImGuiCol_Border, kBack);
@@ -405,7 +464,20 @@ namespace fv::Remote
 				}
 				DrawRemote(Canvas{ GetWindowDrawList(), origin, scale }, hover, down, view, label);
 				if (hovered && IsItemClicked(0)) {
-					Press(hover, target, view);
+					if (hover == Key::kNone && !g_locked) {
+						g_dragging = true;  // grabbed an empty spot: move the remote
+						g_grab = ImVec2{ mouse.x - g_pos.x, mouse.y - g_pos.y };
+					} else {
+						Press(hover, target, view);
+					}
+				}
+				if (g_dragging) {
+					if (IsMouseDown(0)) {
+						g_pos = ImVec2{ mouse.x - g_grab.x, mouse.y - g_grab.y };
+					} else {
+						g_dragging = false;
+						SaveState();
+					}
 				}
 
 				// the video list under the name bar (search key / click the name): scroll and pick
@@ -462,6 +534,39 @@ namespace fv::Remote
 				Controls(v.formID, false);
 				Separator();
 			}
+		}
+	}
+
+	void Tick()
+	{
+		static bool walking = false;
+		const bool  open = g_window && g_window->IsOpen.load();
+		float       x = 0.0f, y = 0.0f;
+		if (open) {
+			DWORD pid = 0;
+			::GetWindowThreadProcessId(::GetForegroundWindow(), &pid);
+			if (pid == ::GetCurrentProcessId()) {  // the game has focus
+				auto down = [](int a_vk) { return (::GetAsyncKeyState(a_vk) & 0x8000) != 0; };
+				y = (down('W') ? 1.0f : 0.0f) - (down('S') ? 1.0f : 0.0f);
+				x = (down('D') ? 1.0f : 0.0f) - (down('A') ? 1.0f : 0.0f);
+				if (x != 0.0f && y != 0.0f) {
+					x *= 0.7071f;
+					y *= 0.7071f;
+				}
+			}
+		}
+		const bool moving = x != 0.0f || y != 0.0f;
+		if (!moving && !walking) {
+			return;
+		}
+		walking = moving;
+		if (auto* tasks = F4SE::GetTaskInterface()) {
+			// the menu sets the game to ignore keyboard and mouse; feed the movement in directly
+			tasks->AddTask([x, y]() {
+				if (auto* controls = RE::PlayerControls::GetSingleton()) {
+					controls->data.moveInputVec = RE::NiPoint2(x, y);
+				}
+			});
 		}
 	}
 

@@ -168,24 +168,37 @@ namespace fv::Screen
 		template <class F>
 		void ForEachLoadedCell(F&& a_fn)
 		{
+			std::vector<RE::TESObjectCELL*> seen;
+			auto visit = [&](RE::TESObjectCELL* a_cell) {
+				if (a_cell && std::ranges::find(seen, a_cell) == seen.end()) {
+					seen.push_back(a_cell);
+					a_fn(a_cell);
+				}
+			};
+			if (auto* player = RE::PlayerCharacter::GetSingleton()) {
+				visit(player->GetParentCell());
+			}
 			auto* tes = RE::TES::GetSingleton();
 			if (!tes) {
 				return;
 			}
 			if (tes->interiorCell) {
-				a_fn(tes->interiorCell);
+				visit(tes->interiorCell);
 				return;
 			}
-			if (auto* grid = tes->gridCells) {
+			if (auto* grid = tes->gridCells; grid && grid->gridCell) {
 				const auto dim = std::min<std::uint32_t>(grid->dimension, 15);
-				for (std::uint32_t x = 0; x < dim; ++x) {
-					for (std::uint32_t y = 0; y < dim; ++y) {
-						auto* gc = grid->Get(x, y);
-						if (gc && gc->cell && gc->cell->IsAttached()) {
-							a_fn(gc->cell);
-						}
+				for (std::uint32_t i = 0; i < dim * dim; ++i) {
+					auto* cell = grid->gridCell[i].cell;
+					if (cell && cell->IsAttached()) {
+						visit(cell);
 					}
 				}
+			}
+			// persistent objects of the worldspace (mods often place screens/projectors as persistent refs; they
+			// aren't listed in the cell they stand in)
+			if (tes->worldSpace) {
+				visit(tes->worldSpace->persistentCell);
 			}
 		}
 
@@ -1479,8 +1492,9 @@ namespace fv::Screen
 		a_binding.candidateIndex = index;
 		a_binding.candidateCount = count;
 		a_binding.flip = userFlip;
+		a_binding.bigScreen = !a_binding.classic && settings.bigScreenRadius > 0.0f && geom->worldBound.fRadius >= settings.bigScreenRadius;
 		// big screens (the drive-in cinema) fill the whole screen instead of keeping black bars
-		if (settings.bigScreenStretch && !a_binding.classic && settings.bigScreenRadius > 0.0f && geom->worldBound.fRadius >= settings.bigScreenRadius) {
+		if (settings.bigScreenStretch && a_binding.bigScreen) {
 			a_binding.screenAspect = 0.0f;
 			a_binding.faceAspect[0] = a_binding.faceAspect[1] = 0.0f;
 			log::info("{}: big screen (size {:.0f}): stretching the video to fill it", RefName(a_ref), geom->worldBound.fRadius);

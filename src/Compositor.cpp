@@ -12,6 +12,7 @@ cbuffer Params : register(b0)
 	float4 dst;    // x0, y0, x1, y1 in clip space
 	float4 mapU;   // ou, au, bu, -
 	float4 mapV;   // ov, av, bv, -
+	float4 fx;     // brightness, VHS strength (0 = off), time in seconds, -
 };
 Texture2D    tex : register(t0);
 SamplerState smp : register(s0);
@@ -31,9 +32,49 @@ VSOut VSMain(uint id : SV_VertexID)
 	return o;
 }
 
+float Hash(float2 p)
+{
+	return frac(sin(dot(p, float2(12.9898, 78.233))) * 43758.5453);
+}
+
+// Old VHS tape: soft picture, colour bleeding sideways, faint scanlines, tape noise, line jitter and a
+// tracking line slowly rolling down the picture. s = strength (0..1).
+float3 VHS(float2 uv, float s, float t)
+{
+	float lineNo = floor(uv.y * 480.0);
+	float frame  = floor(t * 30.0);
+	// every line wobbles a little sideways
+	uv.x += (Hash(float2(lineNo, frame)) - 0.5) * 0.0016 * s;
+	// tracking line rolling down every ~14 s
+	float band   = frac(t / 14.0);
+	float inBand = 1.0 - smoothstep(0.0, 0.018, abs(uv.y - band));
+	uv.x += inBand * (Hash(float2(lineNo, frame + 7.0)) - 0.5) * 0.02 * s;
+
+	float  px = 0.0035 * s;  // colour bleed / softness
+	float3 c;
+	c.r = tex.Sample(smp, uv + float2(px, 0.0)).r;
+	c.g = tex.Sample(smp, uv).g;
+	c.b = tex.Sample(smp, uv - float2(px, 0.0)).b;
+	float3 soft = (tex.Sample(smp, uv + float2(px * 0.7, 0.0)).rgb + tex.Sample(smp, uv - float2(px * 0.7, 0.0)).rgb) * 0.5;
+	c = lerp(c, soft, 0.35 * s);
+
+	// washed-out tape colours, slightly warm
+	float l = dot(c, float3(0.299, 0.587, 0.114));
+	c = lerp(float3(l, l, l), c, 1.0 - 0.18 * s);
+	c *= float3(1.0 + 0.03 * s, 1.0, 1.0 - 0.04 * s);
+	c = lerp(c, c * 0.92 + 0.04, 0.5 * s);  // lifted blacks
+
+	// scanlines and grain
+	c *= 1.0 - 0.10 * s * (0.5 + 0.5 * sin(uv.y * 240.0 * 6.2831853));
+	c += (Hash(uv * 731.0 + frame) - 0.5) * 0.07 * s;
+	c += inBand * (Hash(float2(uv.x * 97.0, frame)) - 0.3) * 0.25 * s;
+	return saturate(c);
+}
+
 float4 PSMain(VSOut i) : SV_Target
 {
-	return float4(tex.Sample(smp, i.uv).rgb, 1.0);
+	float3 c = fx.y > 0.0 ? VHS(i.uv, fx.y, fx.z) : tex.Sample(smp, i.uv).rgb;
+	return float4(saturate(c * fx.x), 1.0);
 }
 )";
 
@@ -42,6 +83,7 @@ float4 PSMain(VSOut i) : SV_Target
 			float dst[4];
 			float mapU[4];
 			float mapV[4];
+			float fx[4];
 		};
 
 		// Everything Compose() changes, captured and put back afterwards (the game caches its D3D state).
@@ -71,6 +113,7 @@ float4 PSMain(VSOut i) : SV_Target
 			ID3D11ClassInstance*      gsInst[256]{};
 			UINT                      psInstCount{ 256 }, vsInstCount{ 256 }, gsInstCount{ 256 };
 			ID3D11Buffer*             vsCB{};
+			ID3D11Buffer*             psCB{};
 			D3D11_PRIMITIVE_TOPOLOGY  topology{};
 			ID3D11InputLayout*        layout{};
 			ID3D11Buffer*             vb{};
@@ -95,6 +138,7 @@ float4 PSMain(VSOut i) : SV_Target
 				c->HSGetShader(&hs, nullptr, nullptr);
 				c->DSGetShader(&ds, nullptr, nullptr);
 				c->VSGetConstantBuffers(0, 1, &vsCB);
+				c->PSGetConstantBuffers(0, 1, &psCB);
 				c->IAGetPrimitiveTopology(&topology);
 				c->IAGetInputLayout(&layout);
 				c->IAGetVertexBuffers(0, 1, &vb, &vbStride, &vbOffset);
@@ -126,6 +170,7 @@ float4 PSMain(VSOut i) : SV_Target
 				c->HSSetShader(hs, nullptr, 0);
 				c->DSSetShader(ds, nullptr, 0);
 				c->VSSetConstantBuffers(0, 1, &vsCB);
+				c->PSSetConstantBuffers(0, 1, &psCB);
 				c->IASetPrimitiveTopology(topology);
 				c->IASetInputLayout(layout);
 				c->IASetVertexBuffers(0, 1, &vb, &vbStride, &vbOffset);
@@ -155,6 +200,7 @@ float4 PSMain(VSOut i) : SV_Target
 					Rel(gsInst[i]);
 				}
 				Rel(vsCB);
+				Rel(psCB);
 				Rel(layout);
 				Rel(vb);
 				Rel(ib);
@@ -241,7 +287,7 @@ float4 PSMain(VSOut i) : SV_Target
 	}
 
 	void Compositor::Draw(ID3D11DeviceContext* a_context, std::uint32_t a_width, std::uint32_t a_height, const Region& a_region,
-		ID3D11ShaderResourceView* a_srv, ID3D11SamplerState* a_sampler)
+		ID3D11ShaderResourceView* a_srv, ID3D11SamplerState* a_sampler, const float* a_fx)
 	{
 		D3D11_MAPPED_SUBRESOURCE mapped{};
 		if (FAILED(a_context->Map(_cb.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
@@ -261,6 +307,10 @@ float4 PSMain(VSOut i) : SV_Target
 		p->mapV[1] = a_region.av;
 		p->mapV[2] = a_region.bv;
 		p->mapV[3] = 0.0f;
+		p->fx[0] = a_fx ? a_fx[0] : 1.0f;
+		p->fx[1] = a_fx ? a_fx[1] : 0.0f;
+		p->fx[2] = a_fx ? a_fx[2] : 0.0f;
+		p->fx[3] = 0.0f;
 		a_context->Unmap(_cb.Get(), 0);
 
 		a_context->PSSetShaderResources(0, 1, &a_srv);
@@ -269,7 +319,7 @@ float4 PSMain(VSOut i) : SV_Target
 	}
 
 	void Compositor::Compose(ID3D11DeviceContext* a_context, ID3D11RenderTargetView* a_target, std::uint32_t a_width, std::uint32_t a_height,
-		ID3D11ShaderResourceView* a_base, ID3D11ShaderResourceView* a_video, std::span<const Region> a_regions)
+		ID3D11ShaderResourceView* a_base, ID3D11ShaderResourceView* a_video, std::span<const Region> a_regions, const float* a_fx)
 	{
 		if (!_ok || !a_target || !a_video) {
 			return;
@@ -300,15 +350,16 @@ float4 PSMain(VSOut i) : SV_Target
 		a_context->DSSetShader(nullptr, nullptr, 0);
 		ID3D11Buffer* cb = _cb.Get();
 		a_context->VSSetConstantBuffers(0, 1, &cb);
+		a_context->PSSetConstantBuffers(0, 1, &cb);
 
 		if (a_base) {
-			Draw(a_context, a_width, a_height, Region{ 0, 0, static_cast<float>(a_width), static_cast<float>(a_height) }, a_base, _clamp.Get());
+			Draw(a_context, a_width, a_height, Region{ 0, 0, static_cast<float>(a_width), static_cast<float>(a_height) }, a_base, _clamp.Get(), nullptr);
 		} else {
 			const float black[4]{ 0, 0, 0, 1 };
 			a_context->ClearRenderTargetView(a_target, black);
 		}
 		for (const auto& region : a_regions) {
-			Draw(a_context, a_width, a_height, region, a_video, _border.Get());
+			Draw(a_context, a_width, a_height, region, a_video, _border.Get(), a_fx);
 		}
 
 		ID3D11ShaderResourceView* nullSRV = nullptr;

@@ -44,6 +44,9 @@ namespace fv
 		float falloffCurve{ 2.0f };
 		float bigScreenRadius{ 500.0f };   // screens this big (mesh radius) use the big-screen distances
 		bool  bigScreenStretch{ true };    // big screens: stretch the video to fill them (no black bars)
+		float bigScreenBrightness{ 1.15f };  // big screens (the drive-in): picture brightness
+		float bigScreenVHS{ 0.5f };          // big screens: VHS tape look, 0 = off, 1 = strong
+		float startVolume{ 0.5f };           // volume each screen starts at (the remote's middle button)
 		float bigMinDistance{ 1500.0f };
 		float bigMaxDistance{ 12000.0f };
 

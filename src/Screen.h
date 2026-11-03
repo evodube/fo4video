@@ -52,6 +52,7 @@ namespace fv
 		std::vector<bool>                   hiddenLayerWasCulled;  // parallel to hiddenLayers: restore exactly
 		bool                                classic{ false };       // TV screen: whole texture, untouched UVs (like 0.1)
 		bool                                twoSidedCleared{ false };  // we stopped drawing the back of the sheet
+		bool                                bigScreen{ false };        // the drive-in: own brightness / VHS look
 	};
 
 	namespace Screen

@@ -146,7 +146,7 @@ namespace fv
 		std::array<bool, 6> _keyWasDown{};
 		struct Prefs
 		{
-			float volume{ 1.0f };
+			float volume{ -1.0f };  // -1 = fStartVolume
 			bool  muted{ false };
 		};
 		std::unordered_map<std::uint32_t, Prefs> _prefs;  // remote volume/mute per screen, kept across videos
