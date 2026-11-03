@@ -1545,7 +1545,9 @@ namespace fv::Screen
 		}
 
 		a_binding.geometryName = candidates[index].name;
-		if (settings.selfLit && !a_binding.isEffect && !a_binding.classic && geom->IsTriShape()) {
+		// not on the drive-in: the glowing shader drew parts of its huge screen see-through
+		const bool bigScreen = settings.bigScreenRadius > 0.0f && geom->worldBound.fRadius >= settings.bigScreenRadius;
+		if (settings.selfLit && !bigScreen && !a_binding.isEffect && !a_binding.classic && geom->IsTriShape()) {
 			MakeSelfLit(a_binding, geom, prop, mat, a_slotTexture);
 		}
 

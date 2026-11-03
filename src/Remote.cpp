@@ -657,10 +657,10 @@ namespace fv::Remote
 				dirty = true;
 			}
 			Tip("Off: stretch every video to fill its screen. Applies when a video starts (or press Apply below).");
-			dirty |= Checkbox("Projector & cinema screens glow like TVs", &s.selfLit);
+			dirty |= Checkbox("Projector screens glow like TVs", &s.selfLit);
 			Tip("Same brightness day and night, whichever way the screen faces. Off: lit by the world (dark at night). "
 				"Press Apply below to switch the screens playing now.");
-			dirty |= Percent("Projector & cinema glow brightness", &s.selfLitBrightness, 4.0f, "100% = the video as is.");
+			dirty |= Percent("Projector glow brightness", &s.selfLitBrightness, 4.0f, "100% = the video as is.");
 			dirty |= Checkbox("Cinema: stretch to fill the screen", &s.bigScreenStretch);
 			dirty |= Percent("Cinema brightness", &s.bigScreenBrightness, 4.0f, "100% = as is, up to 400%. Only the drive-in screen. Applies right away.");
 			dirty |= Percent("Cinema VHS look", &s.bigScreenVHS, 1.0f, "Soft picture, colour bleed, faded colours, faint scanlines. 0% = off.");
@@ -761,20 +761,14 @@ namespace fv::Remote
 	{
 		// While the remote is open the menu framework makes the game ignore keyboard and mouse (good: the mouse
 		// only drives the remote). Walking is fed in directly from the held W/A/S/D keys.
-		void GameInputForRemote(bool a_open)
+		// Two modes while the remote is open:
+		//  * cursor mode: the menu framework shows the mouse cursor for clicking and keeps keyboard and mouse
+		//    away from the game (that is why you can't walk then);
+		//  * walk mode: the remote stays on screen but the game gets keyboard and mouse back, so you walk and
+		//    look around normally.
+		// Pressing W/A/S/D switches to walk mode; Left Alt or the remote key (F6) brings the cursor back.
+		void WatchFreeze()  // main thread, every frame while the remote takes the mouse
 		{
-			auto* pc = RE::PlayerControls::GetSingleton();
-			if (!pc) {
-				return;
-			}
-			static bool walking = false;
-			if (!a_open) {
-				if (walking) {
-					pc->data.moveInputVec = RE::NiPoint2(0.0f, 0.0f);  // stop when the remote closes
-					walking = false;
-				}
-				return;
-			}
 			if (g_unfreezeFrames > 0) {
 				--g_unfreezeFrames;
 				if (auto* ui = RE::UI::GetSingleton(); ui && ui->menuMode == g_menuModeBase + 1) {
@@ -783,55 +777,51 @@ namespace fv::Remote
 					log::info("remote: game keeps running while the remote is open");
 				}
 			}
+		}
 
-			DWORD pid = 0;
-			::GetWindowThreadProcessId(::GetForegroundWindow(), &pid);
-			const bool focused = pid == ::GetCurrentProcessId();
-			auto       down = [&](int a_vk) { return focused && (::GetAsyncKeyState(a_vk) & 0x8000) != 0; };
-			float      y = (down('W') ? 1.0f : 0.0f) - (down('S') ? 1.0f : 0.0f);
-			float      x = (down('D') ? 1.0f : 0.0f) - (down('A') ? 1.0f : 0.0f);
-			if (x != 0.0f && y != 0.0f) {
-				x *= 0.7071f;
-				y *= 0.7071f;
+		void CursorMode(bool a_cursor)
+		{
+			if (!g_window || g_window->BlockUserInput.load() == a_cursor) {
+				return;
 			}
-			if (x != 0.0f || y != 0.0f || walking) {
-				pc->data.moveInputVec = RE::NiPoint2(x, y);
-				walking = x != 0.0f || y != 0.0f;
+			if (a_cursor) {
+				if (auto* ui = RE::UI::GetSingleton()) {
+					g_menuModeBase = ui->menuMode;  // the framework pauses again when the cursor comes back
+					g_unfreezeFrames = 60;
+				}
 			}
-
-			static int frame = 0;
-			if (++frame % 120 == 1) {
-				auto* ui = RE::UI::GetSingleton();
-				auto* cm = RE::ControlMap::GetSingleton();
-				log::info("remote: menuMode={} ignoreKeyboardMouse={} W held={} move=({:.2f},{:.2f}) blockPlayerInput={}", ui ? ui->menuMode : 0u,
-					cm ? cm->ignoreKeyboardMouse : false, down('W'), pc->data.moveInputVec.x, pc->data.moveInputVec.y, pc->blockPlayerInput);
-			}
+			g_window->BlockUserInput = a_cursor;
+			log::info("remote: {}", a_cursor ? "cursor mode (click the remote)" : "walk mode (W/A/S/D, mouse looks around)");
 		}
 	}
 
 	void Tick()
 	{
-		static bool active = false;
-		const bool  open = g_window && g_window->IsOpen.load();
-		auto*       tasks = F4SE::GetTaskInterface();
-		if (!tasks || (!open && !active)) {
+		const bool open = g_window && g_window->IsOpen.load();
+		if (!open) {
 			return;
 		}
-		active = open;
-		tasks->AddTask([open]() { GameInputForRemote(open); });
-	}
-
-	void Register()
-	{
-		if (!F4SEMenuFramework::IsInstalled()) {
-			log::info("F4SE Menu Framework not installed: the remote (F6) is unavailable, hotkeys still work");
+		DWORD pid = 0;
+		::GetWindowThreadProcessId(::GetForegroundWindow(), &pid);
+		if (pid != ::GetCurrentProcessId()) {
 			return;
 		}
-		F4SEMenuFramework::SetSection("Real Videos");
-		F4SEMenuFramework::AddSectionItem("Now playing", RenderPage);
-		F4SEMenuFramework::AddSectionItem("Settings", RenderSettings);
-		g_window = F4SEMenuFramework::AddWindow(RenderWindow, true);
-		log::info("remote registered with F4SE Menu Framework{}", g_window ? "" : " (window could not be created)");
+		auto down = [](int a_vk) { return (::GetAsyncKeyState(a_vk) & 0x8000) != 0; };
+		static bool altWas = false;
+		const bool  alt = down(VK_LMENU);
+		if (g_window->BlockUserInput.load()) {
+			if (down('W') || down('A') || down('S') || down('D')) {
+				CursorMode(false);  // start walking right away
+			}
+		} else if (alt && !altWas) {
+			CursorMode(true);
+		}
+		altWas = alt;
+		if (g_window->BlockUserInput.load()) {
+			if (auto* tasks = F4SE::GetTaskInterface()) {
+				tasks->AddTask([]() { WatchFreeze(); });
+			}
+		}
 	}
 
 	void Toggle()
@@ -841,7 +831,11 @@ namespace fv::Remote
 			return;
 		}
 		if (g_window->IsOpen) {
-			g_window->IsOpen = false;
+			if (!g_window->BlockUserInput.load()) {
+				CursorMode(true);  // walking: F6 brings the cursor back first
+			} else {
+				g_window->IsOpen = false;
+			}
 			return;
 		}
 		auto ref = Manager::Get().Target();
@@ -864,6 +858,7 @@ namespace fv::Remote
 			g_menuModeBase = ui->menuMode;
 			g_unfreezeFrames = 60;
 		}
+		g_window->BlockUserInput = true;  // opens in cursor mode
 		g_window->IsOpen = true;
 	}
 }
