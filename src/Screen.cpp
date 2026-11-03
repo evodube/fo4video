@@ -855,7 +855,7 @@ namespace fv::Screen
 			return LoadViaTextureSet(a_path);
 		}
 
-		std::array<RE::NiPointer<RE::NiTexture>, 16> g_slotTextures;
+		std::array<RE::NiPointer<RE::NiTexture>, 32> g_slotTextures;  // 0-15 pictures, 16-31 glow maps
 
 		std::string ModelKey(RE::TESObjectREFR* a_ref)
 		{
@@ -1213,6 +1213,53 @@ namespace fv::Screen
 			a_binding.liftedTo.reset();
 		}
 
+		// Glow map: swap the screen's plain lit material for a glow-map one (the kind the game uses for neon signs)
+		// carrying the same textures plus our glow texture (black, with the video where the picture is). The mesh
+		// stays lit by the world, so its frame and back react to light like any other object; only the picture
+		// gives off light. Nothing here is undone by the game; Unbind puts the plain material back.
+		bool MakeGlowMap(ScreenBinding& a_binding, RE::BSShaderProperty* a_prop, RE::BSShaderMaterial* a_mat, RE::NiTexture* a_glowTexture)
+		{
+			using F = RE::BSShaderProperty::EShaderPropertyFlag;
+			if (!a_glowTexture || a_mat->GetType() != RE::BSShaderMaterial::Type::kLighting ||
+				a_mat->GetFeature() != RE::BSShaderMaterial::Feature::kDefault) {
+				log::info("'{}': glow map not possible here (material kind {}); using the glowing shader", a_binding.geometryName,
+					static_cast<int>(a_mat->GetFeature()));
+				return false;
+			}
+			// a new glow-map material, made the way the game makes one (its own class's Create)
+			REL::Relocation<std::uintptr_t*> glowVtbl{ RE::VTABLE::BSLightingShaderMaterialGlowmap[0] };
+			using create_t = RE::BSShaderMaterial* (*)(RE::BSShaderMaterial*);
+			auto* glowMat = reinterpret_cast<create_t>(glowVtbl.get()[1])(a_mat);
+			if (!glowMat || glowMat->GetFeature() != RE::BSShaderMaterial::Feature::kGlowmap) {
+				log::warn("'{}': couldn't make a glow-map material; using the glowing shader", a_binding.geometryName);
+				return false;
+			}
+			// the screen's own settings and textures (the plain lit material's copy: only the shared part)
+			REL::Relocation<std::uintptr_t*> litVtbl{ RE::VTABLE::BSLightingShaderMaterial[0] };
+			using copy_t = void (*)(RE::BSShaderMaterial*, const RE::BSShaderMaterial*);
+			reinterpret_cast<copy_t>(litVtbl.get()[2])(glowMat, a_mat);
+			GlowTexture(glowMat) = RE::NiPointer<RE::NiTexture>(a_glowTexture);
+			glowMat->IncRef();
+
+			auto* lit = static_cast<RE::BSLightingShaderProperty*>(a_prop);
+			static RE::NiColor white{ 1.0f, 1.0f, 1.0f };
+			a_binding.originalEmitColor = lit->emitColor;
+			a_binding.originalEmitScale = lit->emitColorScale;
+			a_binding.originalGlowFlag = a_prop->flags.all(F::kGlowMap);
+			a_binding.originalOwnEmitFlag = a_prop->flags.all(F::kOwnEmit);
+
+			a_prop->material = glowMat;  // the property's reference to the plain material is kept for Unbind
+			lit->emitColor = &white;
+			lit->emitColorScale = Settings::Get().selfLitBrightness;
+			a_prop->SetFlag(F::kGlowMap, true);
+			a_prop->SetFlag(F::kOwnEmit, true);
+			RebuildRenderPasses(a_prop);
+			a_binding.glowMap = true;
+			a_binding.glowMaterial = glowMat;
+			log::info("'{}': glow map: the frame keeps the game's lighting, only the picture gives off light", a_binding.geometryName);
+			return true;
+		}
+
 		void MakeSelfLit(ScreenBinding& a_binding, RE::BSGeometry* a_geom, RE::BSShaderProperty* a_litProp, RE::BSShaderMaterial* a_litMat,
 			RE::NiTexture* a_slotTexture, bool a_faceOnly)
 		{
@@ -1370,7 +1417,7 @@ namespace fv::Screen
 		}
 	}
 
-	bool Bind(RE::TESObjectREFR* a_ref, RE::NiTexture* a_slotTexture, ScreenBinding& a_binding, int a_forceIndex)
+	bool Bind(RE::TESObjectREFR* a_ref, RE::NiTexture* a_slotTexture, ScreenBinding& a_binding, int a_forceIndex, RE::NiTexture* a_glowTexture)
 	{
 		a_binding = {};
 		if (!a_ref || !a_slotTexture) {
@@ -1729,7 +1776,12 @@ namespace fv::Screen
 		}
 
 		a_binding.geometryName = candidates[index].name;
-		if (settings.selfLit && !a_binding.isEffect && !a_binding.classic && geom->IsTriShape()) {
+		const bool tryGlowMap = settings.glowMap && settings.selfLit && !a_binding.isEffect && !a_binding.classic && a_binding.composite &&
+		                        !(settings.bigScreenRadius > 0.0f && geom->worldBound.fRadius >= settings.bigScreenRadius) &&
+		                        !prop->flags.all(RE::BSShaderProperty::EShaderPropertyFlag::kSkinned);
+		if (tryGlowMap && MakeGlowMap(a_binding, prop, mat, a_glowTexture)) {
+			// done: lit screen with a glowing picture
+		} else if (settings.selfLit && !a_binding.isEffect && !a_binding.classic && geom->IsTriShape()) {
 			// The glowing copy (picture only) never showed up in game, so it stays off whatever the INI says.
 			const bool faceOnly = false && settings.selfLitFaceOnly && a_binding.composite && a_binding.faceCount >= 1 && !UsesAlpha(geom) &&
 			                      !prop->flags.all(RE::BSShaderProperty::EShaderPropertyFlag::kSkinned);
@@ -1805,6 +1857,20 @@ namespace fv::Screen
 			}
 		}
 		Unlift(a_binding, a_binding.geometry.get());  // back into its ordered group
+		if (a_binding.glowMap && a_binding.geometry) {
+			using F = RE::BSShaderProperty::EShaderPropertyFlag;
+			auto* gp = GetShaderProperty(a_binding.geometry.get());
+			if (gp && gp->material == a_binding.glowMaterial) {
+				auto* lit = static_cast<RE::BSLightingShaderProperty*>(gp);
+				lit->emitColor = a_binding.originalEmitColor;
+				lit->emitColorScale = a_binding.originalEmitScale;
+				gp->SetFlag(F::kGlowMap, a_binding.originalGlowFlag);
+				gp->SetFlag(F::kOwnEmit, a_binding.originalOwnEmitFlag);
+				gp->material = a_binding.material;  // the plain material back (the reference it always held)
+				GlowTexture(a_binding.glowMaterial).reset();
+				(void)a_binding.glowMaterial->DecRef();
+			}
+		}
 
 		auto* prop = GetShaderProperty(a_binding.geometry.get());
 		if (prop && prop->material == a_binding.material && a_binding.material) {
@@ -1881,6 +1947,10 @@ namespace fv::Screen
 			return prop && prop == a_binding.effectProp.get() && prop->material == a_binding.effectMaterial &&
 			       static_cast<RE::BSEffectShaderMaterial*>(a_binding.effectMaterial)->baseTexture.get() == a_binding.slotTexture.get();
 		}
+		if (a_binding.glowMap) {
+			return prop && prop->material == a_binding.glowMaterial &&
+			       static_cast<RE::BSLightingShaderMaterialBase*>(a_binding.glowMaterial)->diffuseTexture.get() == a_binding.slotTexture.get();
+		}
 		if (!prop || prop->material != a_binding.material) {
 			return false;
 		}
@@ -1908,6 +1978,10 @@ namespace fv::Screen
 		for (int i = 0; i < 2; ++i) {
 			mat->texCoordOffset[i] = a_binding.uvOffset;
 			mat->texCoordScale[i] = a_binding.uvScale;
+			if (a_binding.glowMap && a_binding.glowMaterial) {
+				a_binding.glowMaterial->texCoordOffset[i] = a_binding.uvOffset;
+				a_binding.glowMaterial->texCoordScale[i] = a_binding.uvScale;
+			}
 			if (a_binding.selfLit && a_binding.effectMaterial) {
 				a_binding.effectMaterial->texCoordOffset[i] = a_binding.uvOffset;
 				a_binding.effectMaterial->texCoordScale[i] = a_binding.uvScale;
@@ -1917,6 +1991,12 @@ namespace fv::Screen
 
 	void SetGlow(const ScreenBinding& a_binding, float a_scale)
 	{
+		if (a_binding.bound && a_binding.glowMap && a_binding.geometry) {
+			if (auto* gp = GetShaderProperty(a_binding.geometry.get()); gp && gp->material == a_binding.glowMaterial) {
+				static_cast<RE::BSLightingShaderProperty*>(gp)->emitColorScale = std::clamp(a_scale, 0.0f, 16.0f);
+			}
+			return;
+		}
 		if (!a_binding.bound || !a_binding.selfLit || !a_binding.effectMaterial) {
 			return;
 		}

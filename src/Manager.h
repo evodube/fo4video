@@ -149,6 +149,7 @@ namespace fv
 		std::mutex                           _lock;
 		std::vector<std::unique_ptr<Player>> _players;
 		std::array<Slot, 16>                 _slots;
+		std::array<Slot, 16>                 _glowSlots;  // glow-map textures (Textures\RealVideos\slot16-31.dds)
 
 		std::atomic<bool> _maintainPending{ false };
 		std::uint64_t     _frame{ 0 };

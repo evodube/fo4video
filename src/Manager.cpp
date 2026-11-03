@@ -475,6 +475,7 @@ namespace fv
 		};
 
 		auto slotTexture = Screen::LoadSlotTexture(slot);
+		auto glowTexture = Screen::LoadSlotTexture(slot + 16);  // glow map (optional; missing = glowing shader)
 		if (!slotTexture) {
 			Notify("Real Videos: placeholder textures missing (Data\\Textures\\RealVideos)");
 			releaseSlot();
@@ -504,7 +505,7 @@ namespace fv
 			}
 		}
 
-		if (!Screen::Bind(a_ref, slotTexture.get(), player->binding)) {
+		if (!Screen::Bind(a_ref, slotTexture.get(), player->binding, -1, glowTexture.get())) {
 			Notify(std::format("Real Videos: no screen found on {} (see RealVideos.log)", refName));
 			releaseSlot();
 			return false;
@@ -529,7 +530,7 @@ namespace fv
 					}
 				}
 			}
-			if (clash && !Screen::Bind(a_ref, slotTexture.get(), player->binding)) {
+			if (clash && !Screen::Bind(a_ref, slotTexture.get(), player->binding, -1, glowTexture.get())) {
 				Notify(std::format("Real Videos: no screen found on {} (see RealVideos.log)", refName));
 				releaseSlot();
 				return false;
@@ -544,6 +545,8 @@ namespace fv
 			std::scoped_lock lock(_lock);
 			_slots[slot].niTexture = slotTexture;
 			_slots[slot].refusedLogged = false;
+			_glowSlots[slot].niTexture = glowTexture;
+			_glowSlots[slot].refusedLogged = false;
 			_players.push_back(std::move(player));
 		}
 		if (raw->media) {
@@ -708,7 +711,7 @@ namespace fv
 					}
 					Screen::Unbind(p->binding);
 					if (root && _slots[p->slot].niTexture) {
-						if (Screen::Bind(ref.get(), _slots[p->slot].niTexture.get(), p->binding)) {
+						if (Screen::Bind(ref.get(), _slots[p->slot].niTexture.get(), p->binding, -1, _glowSlots[p->slot].niTexture.get())) {
 							auto* geom = p->binding.geometry.get();
 							const bool taken = std::ranges::any_of(_players, [&](const auto& o) {
 								return o.get() != p.get() && !o->stopping && o->binding.bound && o->binding.geometry.get() == geom;
@@ -1158,7 +1161,7 @@ namespace fv
 
 				Screen::SaveChoice(ref.get(), { index, {}, flip, {} });
 				Screen::Unbind(b);
-				if (Screen::Bind(ref.get(), _slots[player->slot].niTexture.get(), b, std::max(index, 0))) {
+				if (Screen::Bind(ref.get(), _slots[player->slot].niTexture.get(), b, std::max(index, 0), _glowSlots[player->slot].niTexture.get())) {
 					_slots[player->slot].compNeedsDraw = true;
 					player->srgb = b.originalWasSRGB;
 					player->screenAspect = b.screenAspect;
@@ -1246,6 +1249,7 @@ namespace fv
 
 			if (p.stopping) {
 				slot.Unpatch();
+				_glowSlots[p.slot].Unpatch();
 				if (p.media) {
 					// tear down decoder threads / audio voice off the render thread
 					std::thread([media = std::move(p.media)]() mutable { media.reset(); }).detach();
@@ -1263,6 +1267,7 @@ namespace fv
 			if (_inBuildMode) {
 				// build mode: no video anywhere (the screen shows our dark placeholder), and nothing plays
 				slot.Unpatch();
+				_glowSlots[p.slot].Unpatch();
 				if (p.media) {
 					p.media->SetPaused(true);
 				}
@@ -1322,7 +1327,7 @@ namespace fv
 			// the global "Projector glow brightness".
 			const float screenBright = p.brightenable ? p.brightness.load() : 1.0f;
 			const bool  glowing = b.bound && b.selfLit;
-			if (glowing) {
+			if (glowing || (b.bound && b.glowMap)) {
 				Screen::SetGlow(b, b.bigScreen ? 1.0f : settings.selfLitBrightness);
 			}
 			const float pictureBright = (b.bigScreen ? settings.bigScreenBrightness : 1.0f) * screenBright;
@@ -1361,9 +1366,27 @@ namespace fv
 						for (int i = 0; i < b.faceCount && i < 2; ++i) {
 							regions[i] = FaceRegion(b.faceRects[i], slot.compWidth, slot.compHeight, b.faceAspect[i], p.lastVideoWidth, p.lastVideoHeight, b.faceOrient[i]);
 						}
-						Compositor::Get().Compose(a_context, slot.compRTV.Get(), slot.compWidth, slot.compHeight, baseSRV, slot.srv.Get(),
-							std::span<const Compositor::Region>(regions.data(), static_cast<std::size_t>(std::clamp(b.faceCount, 0, 2))),
-							pictureBright != 1.0f ? pictureFx : nullptr, b.glowOverlay, frameScale);
+						const std::span<const Compositor::Region> faces(regions.data(), static_cast<std::size_t>(std::clamp(b.faceCount, 0, 2)));
+						if (b.glowMap) {
+							// glow map: the lit texture gets a black picture (the light comes from the glow texture only),
+							// the glow texture is black everywhere but the picture
+							const float darkFx[4]{ 0.0f, 0.0f, 0.0f, 0.0f };
+							Compositor::Get().Compose(a_context, slot.compRTV.Get(), slot.compWidth, slot.compHeight, baseSRV, slot.srv.Get(), faces, darkFx);
+							auto& glow = _glowSlots[p.slot];
+							if (glow.niTexture && glow.EnsureComposite(a_device, slot.compWidth, slot.compHeight, srgb)) {
+								Compositor::Get().Compose(a_context, glow.compRTV.Get(), glow.compWidth, glow.compHeight, nullptr, slot.srv.Get(), faces,
+									pictureFx);
+							}
+						} else {
+							Compositor::Get().Compose(a_context, slot.compRTV.Get(), slot.compWidth, slot.compHeight, baseSRV, slot.srv.Get(), faces,
+								pictureBright != 1.0f ? pictureFx : nullptr, b.glowOverlay, frameScale);
+						}
+					}
+					if (b.glowMap) {
+						auto& glow = _glowSlots[p.slot];
+						if (glow.compSRV) {
+							glow.Patch(p.slot + 16, glow.compSRV.Get());
+						}
 					}
 					want = slot.compSRV.Get();
 					if (!p.compositeLogged) {

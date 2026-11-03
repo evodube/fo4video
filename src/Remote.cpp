@@ -693,6 +693,9 @@ namespace fv::Remote
 			dirty |= Percent("Projector glow brightness", &s.selfLitBrightness, 4.0f, "100% = the video as is. Applies right away.");
 			dirty |= Checkbox("Glowing screens: draw after the world", &s.selfLitLatePass);
 			Tip("Stops what stands behind a screen (the drive-in's catwalk) from showing through the picture. Press Apply below.");
+			dirty |= Checkbox("Projectors: frame lit by the world (glow map, test)", &s.glowMap);
+			Tip("The screen keeps the game's lighting, so its frame reacts to light like the speakers; only the picture glows. "
+				"Press Apply below. If a projector looks wrong, untick it and Apply.");
 			dirty |= Percent("Projector frame light", &s.frameLight, 4.0f,
 				"Back, frame and pole of a playing projector screen follow the game's light (time of day, weather, indoors). "
 				"Higher = brighter, lower = darker.");

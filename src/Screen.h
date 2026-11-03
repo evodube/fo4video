@@ -74,6 +74,14 @@ namespace fv
 		RE::NiPointer<RE::NiNode>           liftedFrom;
 		RE::NiPointer<RE::NiNode>           liftedTo;
 		RE::NiTransform                     liftedLocal{};
+		// glow map: the screen keeps the game's lighting (frame reacts like the speakers) and only the picture gives
+		// off light, through a glow-map material made for it
+		bool                                glowMap{ false };
+		RE::BSShaderMaterial*               glowMaterial{ nullptr };
+		RE::NiColor*                        originalEmitColor{ nullptr };
+		float                               originalEmitScale{ 0.0f };
+		bool                                originalGlowFlag{ false };
+		bool                                originalOwnEmitFlag{ false };
 	};
 
 	namespace Screen
@@ -85,7 +93,8 @@ namespace fv
 		bool IsPlaceholderTexture(RE::NiTexture* a_tex);
 
 		// a_forceIndex >= 0 picks that candidate mesh; otherwise saved choice / INI / heuristics.
-		bool Bind(RE::TESObjectREFR* a_ref, RE::NiTexture* a_slotTexture, ScreenBinding& a_binding, int a_forceIndex = -1);
+		bool Bind(RE::TESObjectREFR* a_ref, RE::NiTexture* a_slotTexture, ScreenBinding& a_binding, int a_forceIndex = -1,
+			RE::NiTexture* a_glowTexture = nullptr);
 		void Unbind(ScreenBinding& a_binding);
 
 		// Glow strength of a self-lit screen (1 = the video as is). Render thread; does nothing on lit screens.
