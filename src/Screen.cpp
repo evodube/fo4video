@@ -1,4 +1,5 @@
 #include "Screen.h"
+#include "Vtable.h"
 
 #include "Settings.h"
 
@@ -1161,8 +1162,12 @@ namespace fv::Screen
 				return nullptr;
 			}
 			std::memset(mem, 0, sizeof(RE::NiAlphaProperty));
-			REL::Relocation<std::uintptr_t> vtbl{ RE::NiAlphaProperty::VTABLE[0] };
-			*reinterpret_cast<std::uintptr_t*>(mem) = vtbl.address();
+			const auto vtbl = FindVtable(RE::NiAlphaProperty::VTABLE[0], RE::NiAlphaProperty::RTTI);
+			if (!vtbl) {
+				RE::aligned_free(mem);
+				return nullptr;
+			}
+			*reinterpret_cast<std::uintptr_t*>(mem) = vtbl;
 			REL::Relocation<std::uint32_t*> objects{ RE::ID::NiRefObject::Objects };
 			::InterlockedIncrement(reinterpret_cast<volatile LONG*>(objects.get()));  // the game's live object count (its dtor lowers it)
 			auto* alpha = reinterpret_cast<RE::NiAlphaProperty*>(mem);
@@ -1247,17 +1252,22 @@ namespace fv::Screen
 				return false;
 			}
 			// a new glow-map material, made the way the game makes one (its own class's Create)
-			REL::Relocation<std::uintptr_t*> glowVtbl{ RE::VTABLE::BSLightingShaderMaterialGlowmap[0] };
+			const auto glowVtbl = reinterpret_cast<std::uintptr_t*>(
+				FindVtable(RE::VTABLE::BSLightingShaderMaterialGlowmap[0], RE::RTTI::BSLightingShaderMaterialGlowmap));
+			const auto litVtbl = reinterpret_cast<std::uintptr_t*>(FindVtable(RE::VTABLE::BSLightingShaderMaterial[0], RE::RTTI::BSLightingShaderMaterial));
+			if (!glowVtbl || !litVtbl) {
+				log::warn("'{}': glow map not available on this game version; using the glowing shader", a_binding.geometryName);
+				return false;
+			}
 			using create_t = RE::BSShaderMaterial* (*)(RE::BSShaderMaterial*);
-			auto* glowMat = reinterpret_cast<create_t>(glowVtbl.get()[1])(a_mat);
+			auto* glowMat = reinterpret_cast<create_t>(glowVtbl[1])(a_mat);
 			if (!glowMat || glowMat->GetFeature() != RE::BSShaderMaterial::Feature::kGlowmap) {
 				log::warn("'{}': couldn't make a glow-map material; using the glowing shader", a_binding.geometryName);
 				return false;
 			}
 			// the screen's own settings and textures (the plain lit material's copy: only the shared part)
-			REL::Relocation<std::uintptr_t*> litVtbl{ RE::VTABLE::BSLightingShaderMaterial[0] };
 			using copy_t = void (*)(RE::BSShaderMaterial*, const RE::BSShaderMaterial*);
-			reinterpret_cast<copy_t>(litVtbl.get()[2])(glowMat, a_mat);
+			reinterpret_cast<copy_t>(litVtbl[2])(glowMat, a_mat);
 			GlowTexture(glowMat) = RE::NiPointer<RE::NiTexture>(a_glowTexture);
 			glowMat->IncRef();
 

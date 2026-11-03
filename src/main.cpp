@@ -37,6 +37,19 @@ namespace
 	}
 }
 
+// F4SE 0.7.x (game 1.10.984 and 1.11.x) loads plugins by this; 0.6.23 (1.10.163) uses F4SEPlugin_Query below.
+F4SE_PLUGIN_VERSION = []() noexcept {
+	F4SE::PluginVersionData v{};
+	v.PluginName("RealVideos");
+	v.PluginVersion({ 0, 51, 0 });
+	v.AuthorName("evodube");
+	v.UsesAddressLibraryNG(true);
+	v.UsesAddressLibraryAE(true);
+	v.IsLayoutDependentNG(true);
+	v.IsLayoutDependentAE(true);
+	return v;
+}();
+
 extern "C" __declspec(dllexport) bool F4SEAPI F4SEPlugin_Query(const F4SE::QueryInterface* a_f4se, F4SE::PluginInfo* a_info)
 {
 	a_info->infoVersion = F4SE::PluginInfo::kVersion;
@@ -56,7 +69,8 @@ extern "C" __declspec(dllexport) bool F4SEAPI F4SEPlugin_Load(const F4SE::LoadIn
 	fv::log::info("Real Videos ({}) 0.51.0 loading on runtime {} ({})", kName, a_f4se->RuntimeVersion().string(),
 		REX::FModule::IsRuntimeOG() ? "OG" : REX::FModule::IsRuntimeNG() ? "NG" : "AE");
 	if (!REX::FModule::IsRuntimeOG()) {
-		fv::log::warn("this build is tested on OG 1.10.163 only; texture loading falls back to an untested path");
+		fv::log::warn("game {}: supported, but tested on 1.10.163 so far; please report problems with RealVideos.log",
+			a_f4se->RuntimeVersion().string());
 	}
 
 	auto* messaging = F4SE::GetMessagingInterface();
