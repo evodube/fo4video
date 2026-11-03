@@ -1060,12 +1060,12 @@ namespace fv
 					continue;
 				}
 				const float dx = it->where.x - playerPos.x, dy = it->where.y - playerPos.y, dz = it->where.z - playerPos.z;
-				const bool  near = std::sqrt(dx * dx + dy * dy + dz * dz) < it->wakeDistance;
+				const bool  isNear = std::sqrt(dx * dx + dy * dy + dz * dz) < it->wakeDistance;
 				// a screen in a settlement comes back when you're in that settlement, or close by outside any
 				// settlement; while you're in another settlement it stays off even if that one is next door
 				auto       mine = it->workshop.get();
 				auto       here = _playerWorkshopKnown ? _playerWorkshop.get() : RE::NiPointer<RE::TESObjectREFR>{};
-				const bool wake = settings.offInOtherSettlement && mine ? (here ? here.get() == mine.get() : near) : near;
+				const bool wake = settings.offInOtherSettlement && mine ? (here ? here.get() == mine.get() : isNear) : isNear;
 				if (wake && ref->Get3D()) {
 					if (auto* tasks = F4SE::GetTaskInterface()) {
 						tasks->AddTask([this, s = *it]() {
