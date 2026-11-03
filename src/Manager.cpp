@@ -1275,15 +1275,15 @@ namespace fv
 				p.lastVideoHeight = vh;
 			}
 
-			// brightness: the screen's own (remote) times the cinema's. Glowing screens take it on their shader (it can
-			// go past white without clipping); the others get it painted into the picture.
+			// brightness: the screen's own (remote, up to 100%) times the cinema's, painted into the picture on every
+			// screen. (Changing a glowing shader's strength on the fly didn't take on the projectors.) The glow keeps
+			// the global "Projector glow brightness".
 			const float screenBright = p.brightenable ? p.brightness.load() : 1.0f;
 			const bool  glowing = b.bound && b.selfLit;
-			const float baseBright = b.bigScreen ? settings.bigScreenBrightness : 1.0f;
 			if (glowing) {
-				Screen::SetGlow(b, (b.bigScreen ? settings.bigScreenBrightness : settings.selfLitBrightness) * screenBright);
+				Screen::SetGlow(b, b.bigScreen ? 1.0f : settings.selfLitBrightness);
 			}
-			const float pictureBright = glowing ? 1.0f : baseBright * screenBright;
+			const float pictureBright = (b.bigScreen ? settings.bigScreenBrightness : 1.0f) * screenBright;
 			const float pictureFx[4]{ pictureBright, 0.0f, static_cast<float>(std::fmod(seconds, 3600.0)), 0.0f };
 			const bool  brightChanged = std::abs(pictureBright - p.lastPictureBrightness) > 0.0001f;
 			p.lastPictureBrightness = pictureBright;
