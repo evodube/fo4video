@@ -53,7 +53,7 @@ extern "C" __declspec(dllexport) bool F4SEAPI F4SEPlugin_Load(const F4SE::LoadIn
 {
 	F4SE::Init(a_f4se, { .log = true, .logName = kName, .trampoline = false });
 
-	fv::log::info("Real Videos ({}) 0.52.0 loading on runtime {} ({})", kName, a_f4se->RuntimeVersion().string(),
+	fv::log::info("Real Videos ({}) 0.53.0 loading on runtime {} ({})", kName, a_f4se->RuntimeVersion().string(),
 		REX::FModule::IsRuntimeOG() ? "OG" : REX::FModule::IsRuntimeNG() ? "NG" : "AE");
 	if (!REX::FModule::IsRuntimeOG()) {
 		fv::log::warn("game {}: supported, but tested on 1.10.163 so far; please report problems with RealVideos.log",
@@ -64,6 +64,14 @@ extern "C" __declspec(dllexport) bool F4SEAPI F4SEPlugin_Load(const F4SE::LoadIn
 	if (!messaging || !messaging->RegisterListener(OnMessage)) {
 		fv::log::error("could not register F4SE message listener");
 		return false;
+	}
+
+	// remember what the screens were playing in the save game
+	if (auto* ser = F4SE::GetSerializationInterface()) {
+		ser->SetUniqueID('RVID');
+		ser->SetSaveCallback([](const F4SE::SerializationInterface* a_intfc) { fv::Manager::Get().SaveScreens(a_intfc); });
+		ser->SetLoadCallback([](const F4SE::SerializationInterface* a_intfc) { fv::Manager::Get().LoadScreens(a_intfc); });
+		ser->SetRevertCallback([](const F4SE::SerializationInterface*) { fv::Manager::Get().ForgetScreens(); });
 	}
 
 	if (auto* papyrus = F4SE::GetPapyrusInterface()) {

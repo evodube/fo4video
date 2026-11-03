@@ -969,6 +969,7 @@ namespace fv
 						s.wakeDistance = limit * 0.9f;  // a little closer than where it turned off, so it doesn't flicker on/off
 						s.name = p->name;
 						s.workshop = p->workshop;
+						s.paused = p->userPaused.load();
 						if (goOff) {
 							log::info("{}: you're in another settlement; turned off until you're back (at {:.0f}s)", p->name,
 								static_cast<double>(s.position) / 1e7);
@@ -1070,8 +1071,13 @@ namespace fv
 				if (wake && ref->Get3D()) {
 					if (auto* tasks = F4SE::GetTaskInterface()) {
 						tasks->AddTask([this, s = *it]() {
-							if (auto r = s.ref.get()) {
-								Start(r.get(), s.kind, s.file, s.loop, s.position, true);
+							if (auto r = s.ref.get(); r && Start(r.get(), s.kind, s.file, s.loop, s.position, true) && s.paused) {
+								std::scoped_lock lock(_lock);
+								for (auto& p : _players) {
+									if (!p->stopping && Is(*p, s.formID)) {
+										p->userPaused = true;
+									}
+								}
 							}
 						});
 					}
@@ -1942,4 +1948,172 @@ namespace fv
 			Screen::ReapplyUV(p.binding);
 		}
 	}
+
+	// ---------------- save games ----------------
+	//
+	// Record 'SCRN' v1: count, then per screen: formID, workshop formID, kind, loop, paused, position, where (x, y, z),
+	// file (length + UTF-16). Record 'PREF' v1: count, then per screen: formID, volume, muted.
+	// Loaded screens start out "asleep" and come on by the same rules as screens you walked away from.
+
+	namespace
+	{
+		constexpr std::uint32_t kScreensRecord = 'SCRN';
+		constexpr std::uint32_t kPrefsRecord = 'PREF';
+
+		void WriteString(const F4SE::SerializationInterface* a_intfc, const std::wstring& a_s)
+		{
+			const auto n = static_cast<std::uint32_t>(a_s.size());
+			a_intfc->WriteRecordData(n);
+			if (n) {
+				a_intfc->WriteRecordData(a_s.data(), n * sizeof(wchar_t));
+			}
+		}
+
+		bool ReadString(const F4SE::SerializationInterface* a_intfc, std::wstring& a_s)
+		{
+			std::uint32_t n = 0;
+			if (a_intfc->ReadRecordData(n) != sizeof(n) || n > 4096) {
+				return false;
+			}
+			a_s.resize(n);
+			return n == 0 || a_intfc->ReadRecordData(a_s.data(), n * sizeof(wchar_t)) == n * sizeof(wchar_t);
+		}
+	}
+
+	void Manager::SaveScreens(const F4SE::SerializationInterface* a_intfc)
+	{
+		std::scoped_lock lock(_lock);
+		struct Entry
+		{
+			std::uint32_t formID, workshop;
+			std::uint8_t  kind, loop, paused;
+			std::int64_t  position;
+			RE::NiPoint3  where;
+			std::wstring  file;
+		};
+		std::vector<Entry> entries;
+		for (auto& p : _players) {
+			if (p->stopping) {
+				continue;
+			}
+			auto  ref = p->ref.get();
+			auto* g = p->binding.bound ? p->binding.geometry.get() : nullptr;
+			auto  ws = p->workshop.get();
+			entries.push_back({ p->formID, ws ? ws->GetFormID() : 0u, static_cast<std::uint8_t>(p->kind), p->loop, p->userPaused.load(),
+				p->media ? p->media->Clock() : 0, g ? g->worldBound.center : ref ? ref->GetPosition() : RE::NiPoint3{}, p->file });
+		}
+		for (auto& s : _sleepers) {
+			auto ws = s.workshop.get();
+			entries.push_back({ s.formID, ws ? ws->GetFormID() : 0u, static_cast<std::uint8_t>(s.kind), s.loop, s.paused, s.position, s.where, s.file });
+		}
+		if (a_intfc->OpenRecord(kScreensRecord, 1)) {
+			a_intfc->WriteRecordData(static_cast<std::uint32_t>(entries.size()));
+			for (const auto& e : entries) {
+				a_intfc->WriteRecordData(e.formID);
+				a_intfc->WriteRecordData(e.workshop);
+				a_intfc->WriteRecordData(e.kind);
+				a_intfc->WriteRecordData(e.loop);
+				a_intfc->WriteRecordData(e.paused);
+				a_intfc->WriteRecordData(e.position);
+				a_intfc->WriteRecordData(e.where.x);
+				a_intfc->WriteRecordData(e.where.y);
+				a_intfc->WriteRecordData(e.where.z);
+				WriteString(a_intfc, e.file);
+			}
+		}
+		if (a_intfc->OpenRecord(kPrefsRecord, 1)) {
+			a_intfc->WriteRecordData(static_cast<std::uint32_t>(_prefs.size()));
+			for (const auto& [key, pr] : _prefs) {
+				a_intfc->WriteRecordData(key);
+				a_intfc->WriteRecordData(pr.volume);
+				a_intfc->WriteRecordData(static_cast<std::uint8_t>(pr.muted));
+			}
+		}
+		log::info("saved {} screen{} with the game", entries.size(), entries.size() == 1 ? "" : "s");
+	}
+
+	void Manager::LoadScreens(const F4SE::SerializationInterface* a_intfc)
+	{
+		std::scoped_lock lock(_lock);
+		std::uint32_t type = 0, version = 0, length = 0;
+		std::size_t   restored = 0;
+		while (a_intfc->GetNextRecordInfo(type, version, length)) {
+			if (type == kScreensRecord && version == 1) {
+				std::uint32_t count = 0;
+				a_intfc->ReadRecordData(count);
+				for (std::uint32_t i = 0; i < count && i < 256; ++i) {
+					std::uint32_t formID = 0, workshop = 0;
+					std::uint8_t  kind = 0, loop = 1, paused = 0;
+					std::int64_t  position = 0;
+					RE::NiPoint3  where{};
+					std::wstring  file;
+					a_intfc->ReadRecordData(formID);
+					a_intfc->ReadRecordData(workshop);
+					a_intfc->ReadRecordData(kind);
+					a_intfc->ReadRecordData(loop);
+					a_intfc->ReadRecordData(paused);
+					a_intfc->ReadRecordData(position);
+					a_intfc->ReadRecordData(where.x);
+					a_intfc->ReadRecordData(where.y);
+					a_intfc->ReadRecordData(where.z);
+					if (!ReadString(a_intfc, file)) {
+						break;
+					}
+					const auto id = a_intfc->ResolveFormID(formID);
+					auto*      ref = id ? RE::TESForm::GetFormByID<RE::TESObjectREFR>(*id) : nullptr;
+					if (!ref) {
+						continue;  // the object is gone (scrapped, or its mod removed)
+					}
+					Sleeper s;
+					s.ref = ref->GetHandle();
+					s.formID = ref->GetFormID();
+					s.kind = kind == static_cast<std::uint8_t>(SourceKind::kTestPattern) ? SourceKind::kTestPattern : SourceKind::kVideo;
+					s.file = file;
+					s.loop = loop != 0;
+					s.paused = paused != 0;
+					s.position = position;
+					s.where = where;
+					s.wakeDistance = Settings::Get().autoOffDistance * 0.9f;
+					s.name = Screen::RefName(ref);
+					if (workshop) {
+						if (const auto ws = a_intfc->ResolveFormID(workshop)) {
+							if (auto* wsRef = RE::TESForm::GetFormByID<RE::TESObjectREFR>(*ws)) {
+								s.workshop = wsRef->GetHandle();
+							}
+						}
+					}
+					_sleepers.push_back(std::move(s));
+					++restored;
+				}
+			} else if (type == kPrefsRecord && version == 1) {
+				std::uint32_t count = 0;
+				a_intfc->ReadRecordData(count);
+				for (std::uint32_t i = 0; i < count && i < 4096; ++i) {
+					std::uint32_t key = 0;
+					float         volume = -1.0f;
+					std::uint8_t  muted = 0;
+					a_intfc->ReadRecordData(key);
+					a_intfc->ReadRecordData(volume);
+					a_intfc->ReadRecordData(muted);
+					if (const auto id = a_intfc->ResolveFormID(key)) {
+						auto& pr = _prefs[*id];
+						pr.volume = volume;
+						pr.muted = muted != 0;
+					}
+				}
+			}
+		}
+		log::info("save game: {} screen{} will come back on as you get near them", restored, restored == 1 ? "" : "s");
+	}
+
+	void Manager::ForgetScreens()
+	{
+		std::scoped_lock lock(_lock);
+		_sleepers.clear();
+		for (auto& [key, pr] : _prefs) {
+			pr.volume = -1.0f;
+			pr.muted = false;
+		}
+	}
 }
+

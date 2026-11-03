@@ -120,6 +120,11 @@ namespace fv
 	class Manager
 	{
 	public:
+		// the save game remembers what every screen was playing (F4SE co-save); main thread
+		void SaveScreens(const F4SE::SerializationInterface* a_intfc);
+		void LoadScreens(const F4SE::SerializationInterface* a_intfc);
+		void ForgetScreens();
+
 		static Manager& Get();
 
 		// --- remote control (main thread unless noted) ---
@@ -187,6 +192,7 @@ namespace fv
 			float               wakeDistance{ 0.0f };
 			std::string         name;
 			RE::ObjectRefHandle workshop;  // its settlement: back on when you're in it again
+			bool                paused{ false };  // paused with the remote when it went off / was saved
 		};
 		RE::ObjectRefHandle _playerWorkshop;  // the settlement you're standing in (none = outside any)
 		bool                _playerWorkshopKnown{ false };
