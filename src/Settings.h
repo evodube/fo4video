@@ -40,8 +40,15 @@ namespace fv
 		bool  enableAudio{ true };
 		float volume{ 1.0f };
 		bool  autoOff{ true };               // screens you've walked away from turn off, and resume when you come back
-		float autoOffDistance{ 3500.0f };    // further than this (game units, ~50 m; never closer than you can hear it)
-		float autoOffSeconds{ 10.0f };       // ... for this long
+		float autoOffDistance{ 7000.0f };    // further than this (game units, ~100 m; never closer than you can hear it)
+		float autoOffSeconds{ 30.0f };       // ... for this long
+		bool  freeze{ true };                // picture stops updating when far or out of view (sound carries on)
+		float freezeDistance{ 3500.0f };     // ~50 m
+		float freezeSeconds{ 10.0f };
+		int   maxHeightTV{ 720 };            // decode videos no taller than this (0 = full size)
+		int   maxHeightProjector{ 1080 };
+		int   maxHeightCinema{ 1080 };
+		bool  gpuDecode{ false };            // decode on the graphics card (test)
 		float minDistance{ 150.0f };
 		float maxDistance{ 1500.0f };
 		float falloffCurve{ 2.0f };

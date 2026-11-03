@@ -97,6 +97,13 @@ namespace fv
 		put(L"General", L"bAutoOff", b(autoOff));
 		put(L"General", L"fAutoOffDistance", f(autoOffDistance));
 		put(L"General", L"fAutoOffSeconds", f(autoOffSeconds));
+		put(L"General", L"bFreezePicture", b(freeze));
+		put(L"General", L"fFreezeDistance", f(freezeDistance));
+		put(L"General", L"fFreezeSeconds", f(freezeSeconds));
+		put(L"General", L"iMaxHeightTV", i(maxHeightTV));
+		put(L"General", L"iMaxHeightProjector", i(maxHeightProjector));
+		put(L"General", L"iMaxHeightCinema", i(maxHeightCinema));
+		put(L"General", L"bGpuDecoding", b(gpuDecode));
 		put(L"General", L"bOnlySupportedScreens", b(onlySupportedScreens));
 		put(L"General", L"bAimToSelect", b(aimToSelect));
 		put(L"General", L"fAimDistance", f(aimDistance));
@@ -147,6 +154,13 @@ namespace fv
 		autoOff = ReadBool(L"General", L"bAutoOff", autoOff);
 		autoOffDistance = std::max(0.0f, ReadFloat(L"General", L"fAutoOffDistance", autoOffDistance));
 		autoOffSeconds = std::clamp(ReadFloat(L"General", L"fAutoOffSeconds", autoOffSeconds), 0.0f, 3600.0f);
+		freeze = ReadBool(L"General", L"bFreezePicture", freeze);
+		freezeDistance = std::max(0.0f, ReadFloat(L"General", L"fFreezeDistance", freezeDistance));
+		freezeSeconds = std::clamp(ReadFloat(L"General", L"fFreezeSeconds", freezeSeconds), 0.0f, 3600.0f);
+		maxHeightTV = std::max(0, ReadInt(L"General", L"iMaxHeightTV", maxHeightTV));
+		maxHeightProjector = std::max(0, ReadInt(L"General", L"iMaxHeightProjector", maxHeightProjector));
+		maxHeightCinema = std::max(0, ReadInt(L"General", L"iMaxHeightCinema", maxHeightCinema));
+		gpuDecode = ReadBool(L"General", L"bGpuDecoding", gpuDecode);
 		onlySupportedScreens = ReadBool(L"General", L"bOnlySupportedScreens", onlySupportedScreens);
 		aimToSelect = ReadBool(L"General", L"bAimToSelect", aimToSelect);
 		aimDistance = std::max(100.0f, ReadFloat(L"General", L"fAimDistance", aimDistance));

@@ -189,13 +189,14 @@ namespace fv
 
 	// ---------------- Slot ----------------
 
-	bool Slot::Ensure(ID3D11Device* a_device, std::uint32_t a_width, std::uint32_t a_height, bool a_srgb)
+	bool Slot::Ensure(ID3D11Device* a_device, std::uint32_t a_width, std::uint32_t a_height, bool a_srgb, bool a_gpuTarget)
 	{
-		if (texture && width == a_width && height == a_height && srgb == a_srgb) {
+		if (texture && width == a_width && height == a_height && srgb == a_srgb && gpuTarget == a_gpuTarget) {
 			return true;
 		}
 		Unpatch();
 		srv.Reset();
+		rtv.Reset();
 		texture.Reset();
 
 		D3D11_TEXTURE2D_DESC desc{};
@@ -203,27 +204,52 @@ namespace fv
 		desc.Height = a_height;
 		desc.MipLevels = 1;
 		desc.ArraySize = 1;
-		desc.Format = a_srgb ? DXGI_FORMAT_B8G8R8X8_UNORM_SRGB : DXGI_FORMAT_B8G8R8X8_UNORM;
 		desc.SampleDesc.Count = 1;
-		desc.Usage = D3D11_USAGE_DYNAMIC;
-		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-		desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+		if (a_gpuTarget) {
+			// GPU decoding: the frame is drawn in on the GPU (render target)
+			desc.Format = DXGI_FORMAT_B8G8R8A8_TYPELESS;
+			desc.Usage = D3D11_USAGE_DEFAULT;
+			desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+		} else {
+			desc.Format = a_srgb ? DXGI_FORMAT_B8G8R8X8_UNORM_SRGB : DXGI_FORMAT_B8G8R8X8_UNORM;
+			desc.Usage = D3D11_USAGE_DYNAMIC;
+			desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+			desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+		}
 
 		HRESULT hr = a_device->CreateTexture2D(&desc, nullptr, &texture);
 		if (FAILED(hr)) {
 			log::error("CreateTexture2D {}x{} failed (0x{:08X})", a_width, a_height, static_cast<std::uint32_t>(hr));
 			return false;
 		}
-		hr = a_device->CreateShaderResourceView(texture.Get(), nullptr, &srv);
+		const auto viewFormat = a_srgb ? DXGI_FORMAT_B8G8R8A8_UNORM_SRGB : DXGI_FORMAT_B8G8R8A8_UNORM;
+		if (a_gpuTarget) {
+			D3D11_SHADER_RESOURCE_VIEW_DESC sd{};
+			sd.Format = viewFormat;
+			sd.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+			sd.Texture2D.MipLevels = 1;
+			D3D11_RENDER_TARGET_VIEW_DESC rd{};
+			rd.Format = viewFormat;
+			rd.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
+			hr = a_device->CreateShaderResourceView(texture.Get(), &sd, &srv);
+			if (SUCCEEDED(hr)) {
+				hr = a_device->CreateRenderTargetView(texture.Get(), &rd, &rtv);
+			}
+		} else {
+			hr = a_device->CreateShaderResourceView(texture.Get(), nullptr, &srv);
+		}
 		if (FAILED(hr)) {
 			log::error("CreateShaderResourceView failed (0x{:08X})", static_cast<std::uint32_t>(hr));
+			srv.Reset();
+			rtv.Reset();
 			texture.Reset();
 			return false;
 		}
 		width = a_width;
 		height = a_height;
 		srgb = a_srgb;
-		log::info("slot texture {}x{} created (sRGB={})", a_width, a_height, a_srgb);
+		gpuTarget = a_gpuTarget;
+		log::info("slot texture {}x{} created (sRGB={}{})", a_width, a_height, a_srgb, a_gpuTarget ? ", GPU decoding" : "");
 		return true;
 	}
 
@@ -367,6 +393,7 @@ namespace fv
 	void Slot::Release()
 	{
 		Unpatch();
+		rtv.Reset();
 		srv.Reset();
 		texture.Reset();
 		compSRV.Reset();
@@ -495,18 +522,10 @@ namespace fv
 		player->loop = a_loop;
 		player->seekDelta = a_startAt;  // carry on from there (woken up after you walked away)
 
-		if (a_kind == SourceKind::kVideo) {
-			if (!std::filesystem::exists(a_file)) {
-				Notify(std::format("Real Videos: file not found: {}", Narrow(a_file)));
-				releaseSlot();
-				return false;
-			}
-			player->media = std::make_unique<MediaSource>();
-			if (!player->media->Open(a_file, Settings::Get().enableAudio)) {
-				Notify(std::format("Real Videos: could not decode {}", Narrow(std::filesystem::path(a_file).filename().wstring())));
-				releaseSlot();
-				return false;
-			}
+		if (a_kind == SourceKind::kVideo && !std::filesystem::exists(a_file)) {
+			Notify(std::format("Real Videos: file not found: {}", Narrow(a_file)));
+			releaseSlot();
+			return false;
 		}
 
 		if (!Screen::Bind(a_ref, slotTexture.get(), player->binding, -1, glowTexture.get())) {
@@ -543,6 +562,21 @@ namespace fv
 		player->screenID = ScreenOf(player->binding);
 		player->srgb = player->binding.originalWasSRGB;
 		player->screenAspect = player->binding.screenAspect;
+
+		// opened once the screen is known: TVs, projectors and the cinema each have their own size limit
+		if (a_kind == SourceKind::kVideo) {
+			const auto& settings = Settings::Get();
+			const int   maxH = player->binding.classic ? settings.maxHeightTV :
+			                   player->binding.bigScreen ? settings.maxHeightCinema :
+			                                               settings.maxHeightProjector;
+			player->media = std::make_unique<MediaSource>();
+			if (!player->media->Open(a_file, settings.enableAudio, static_cast<std::uint32_t>(std::max(0, maxH)), settings.gpuDecode)) {
+				Notify(std::format("Real Videos: could not decode {}", Narrow(std::filesystem::path(a_file).filename().wstring())));
+				Screen::Unbind(player->binding);
+				releaseSlot();
+				return false;
+			}
+		}
 
 		Player* raw = player.get();
 		{
@@ -700,6 +734,16 @@ namespace fv
 			}
 		}
 
+		// where the camera is and where it looks, for "out of view"
+		RE::NiPoint3 camPos = playerPos, camDir{ 0.0f, 1.0f, 0.0f };
+		bool         haveCam = false;
+		if (auto* camera = RE::PlayerCamera::GetSingleton(); camera && camera->cameraRoot && player) {
+			camPos = camera->cameraRoot->GetWorldTranslate();
+			const float pitch = player->data.angle.x, yaw = player->data.angle.z;
+			camDir = { std::sin(yaw) * std::cos(pitch), std::cos(yaw) * std::cos(pitch), -std::sin(pitch) };
+			haveCam = true;
+		}
+
 		for (auto& p : _players) {
 			if (p->stopping) {
 				continue;
@@ -762,6 +806,37 @@ namespace fv
 				const auto it = _prefs.find(key);
 				p->brightness = it != _prefs.end() ? it->second.brightness : 1.0f;
 				p->brightenable = p->binding.bound && !p->binding.classic;
+			}
+
+			// far away or out of view for a while: stop updating the picture (the sound carries on). Comes back
+			// the moment you look at it or come closer.
+			if (settings.freeze && player && p->binding.bound) {
+				auto*       g = p->binding.geometry.get();
+				const auto  c = g ? g->worldBound.center : ref->GetPosition();
+				const float r = g ? std::max(g->worldBound.fRadius, 1.0f) : 100.0f;
+				const auto  v = c - camPos;
+				const float d = v.Length();
+				bool        inView = true;
+				if (haveCam && d > r) {
+					// inside a generous cone around where you look (wider than the screen's field of view)
+					const float cosAngle = v.Dot(camDir) / d;
+					const float angle = std::acos(std::clamp(cosAngle, -1.0f, 1.0f));
+					inView = angle < 1.15f + std::asin(std::min(1.0f, r / d));  // ~66 degrees + the screen's size
+				}
+				const bool unseen = d > settings.freezeDistance || !inView;
+				const auto now = std::chrono::steady_clock::now();
+				if (!unseen) {
+					p->unseen = false;
+					p->frozen = false;
+				} else if (!p->unseen) {
+					p->unseen = true;
+					p->unseenSince = now;
+				} else if (!p->frozen && now - p->unseenSince >= std::chrono::duration<float>(settings.freezeSeconds)) {
+					p->frozen = true;
+					log::info("{}: picture paused ({}); the sound carries on", p->name, inView ? "far away" : "out of view");
+				}
+			} else {
+				p->frozen = false;
 			}
 
 			// walked away: turn the screen off after a while (frees its decoder, textures and slot) and remember
@@ -1399,11 +1474,55 @@ namespace fv
 				}
 				p.media->SetPaused(held);
 				p.media->SetVolume(p.volume);
-				if (!held && p.loop && p.media->Finished()) {
+				// frozen (far / out of view): no frames taken, so the decoder idles once its few frames are queued;
+				// coming back, the picture jumps to where the sound is
+				const bool frozen = p.frozen.load();
+				if (frozen != p.wasFrozen) {
+					p.wasFrozen = frozen;
+					if (!frozen) {
+						if (p.media->VideoEnded()) {
+							p.media->Seek(p.media->Clock());
+						} else {
+							p.media->SeekVideo(p.media->Clock());
+						}
+					}
+				}
+				if (!held && p.loop && (p.media->Finished() || (frozen && p.media->Duration() > 0 && p.media->Clock() >= p.media->Duration()))) {
 					p.media->Restart();
 				}
 				VideoFrame frame;
-				if (p.media->AcquireFrame(p.media->Clock(), frame)) {
+				if (!frozen && p.media->AcquireFrame(p.media->Clock(), frame) && frame.gpuTexture) {
+					// GPU decoding: draw the decoder's shared texture into the slot texture (black bars around it)
+					const auto [tw, th] = FittedSize(frame.width, frame.height, letterboxAspect);
+					auto&      in = p.gpuIn[frame.gpuShared];
+					if (!in.texture && SUCCEEDED(a_device->OpenSharedResource(frame.gpuShared, IID_PPV_ARGS(&in.texture)))) {
+						in.texture.As(&in.mutex);
+					}
+					auto& view = in.srv[srgb ? 1 : 0];
+					if (in.texture && !view) {
+						D3D11_SHADER_RESOURCE_VIEW_DESC sd{};
+						sd.Format = srgb ? DXGI_FORMAT_B8G8R8A8_UNORM_SRGB : DXGI_FORMAT_B8G8R8A8_UNORM;
+						sd.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+						sd.Texture2D.MipLevels = 1;
+						a_device->CreateShaderResourceView(in.texture.Get(), &sd, &view);
+					}
+					if (view && in.mutex && Compositor::Get().Ready(a_device) && slot.Ensure(a_device, tw, th, srgb, true) &&
+						in.mutex->AcquireSync(1, 0) == S_OK) {
+						const float offX = static_cast<float>((tw - frame.width) / 2), offY = static_cast<float>((th - frame.height) / 2);
+						const Compositor::Region where{ offX, offY, offX + static_cast<float>(frame.width), offY + static_cast<float>(frame.height) };
+						Compositor::Get().Compose(a_context, slot.rtv.Get(), slot.width, slot.height, nullptr, view.Get(),
+							std::span<const Compositor::Region>(&where, 1));
+						in.mutex->ReleaseSync(0);
+						frame.gpuKey = 0;
+						if (p.framesShown++ == 0) {
+							log::info("{}: first video frame on screen ({}x{}, GPU decoding)", p.name, frame.width, frame.height);
+						}
+						fresh = true;
+						vw = frame.width;
+						vh = frame.height;
+					}
+					p.media->RecycleFrame(std::move(frame));
+				} else if (frame.width && !frame.gpuTexture) {
 					const auto [tw, th] = FittedSize(frame.width, frame.height, letterboxAspect);
 					if (slot.Ensure(a_device, tw, th, srgb)) {
 						slot.Upload(a_context, frame.pixels.data(), frame.width, frame.height);
@@ -1501,7 +1620,9 @@ namespace fv
 			//    and lit projector screens given their own brightness from the remote
 			const float vhs = b.bigScreen ? settings.bigScreenVHS : 0.0f;
 			const bool filtered = !composite && b.bound && !b.classic && (pictureBright != 1.0f || vhs > 0.0f) && Compositor::Get().Ready(a_device);
-			if (filtered && slot.srv && slot.width && slot.height && slot.EnsureComposite(a_device, slot.width, slot.height, srgb)) {
+			if (filtered && p.frozen.load() && slot.compSRV) {
+				want = slot.compSRV.Get();  // frozen: keep the last filtered picture, nothing redrawn
+			} else if (filtered && slot.srv && slot.width && slot.height && slot.EnsureComposite(a_device, slot.width, slot.height, srgb)) {
 				const float fx[4]{ pictureBright, vhs, static_cast<float>(std::fmod(seconds, 3600.0)), 0.0f };
 				const Compositor::Region whole{ 0.0f, 0.0f, static_cast<float>(slot.compWidth), static_cast<float>(slot.compHeight) };
 				Compositor::Get().Compose(a_context, slot.compRTV.Get(), slot.compWidth, slot.compHeight, nullptr, slot.srv.Get(),

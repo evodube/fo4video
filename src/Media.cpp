@@ -1,4 +1,5 @@
 #include "Media.h"
+#include <d3d10.h>
 
 namespace fv
 {
@@ -23,6 +24,71 @@ namespace fv
 			}
 			HRESULT _hr;
 		};
+	}
+
+	namespace
+	{
+		// GPU decoding: one decode device for every video, on the game's graphics card
+		struct GpuDecode
+		{
+			std::mutex                   lock;
+			ComPtr<IDXGIAdapter>         adapter;
+			ComPtr<ID3D11Device>         device;
+			ComPtr<ID3D11DeviceContext>  context;
+			ComPtr<IMFDXGIDeviceManager> manager;
+			UINT                         resetToken{ 0 };
+			bool                         tried{ false };
+			bool                         ok{ false };
+		};
+		GpuDecode g_gpu;
+
+		bool EnsureGpuDecode()
+		{
+			std::scoped_lock lock(g_gpu.lock);
+			if (g_gpu.tried) {
+				return g_gpu.ok;
+			}
+			g_gpu.tried = true;
+			if (!g_gpu.adapter) {
+				log::warn("GPU decoding: graphics card not known yet; decoding on the CPU");
+				return false;
+			}
+			const D3D_FEATURE_LEVEL levels[]{ D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0 };
+			HRESULT hr = ::D3D11CreateDevice(g_gpu.adapter.Get(), D3D_DRIVER_TYPE_UNKNOWN, nullptr,
+				D3D11_CREATE_DEVICE_VIDEO_SUPPORT | D3D11_CREATE_DEVICE_BGRA_SUPPORT, levels, 2, D3D11_SDK_VERSION, &g_gpu.device, nullptr,
+				&g_gpu.context);
+			if (FAILED(hr)) {
+				log::warn("GPU decoding: couldn't create a video device ({}); decoding on the CPU", HrStr(hr));
+				return false;
+			}
+			ComPtr<ID3D10Multithread> mt;
+			if (SUCCEEDED(g_gpu.device.As(&mt))) {
+				mt->SetMultithreadProtected(TRUE);  // decoders on several threads share it
+			}
+			hr = ::MFCreateDXGIDeviceManager(&g_gpu.resetToken, &g_gpu.manager);
+			if (SUCCEEDED(hr)) {
+				hr = g_gpu.manager->ResetDevice(g_gpu.device.Get(), g_gpu.resetToken);
+			}
+			if (FAILED(hr)) {
+				log::warn("GPU decoding: no device manager ({}); decoding on the CPU", HrStr(hr));
+				g_gpu.manager.Reset();
+				g_gpu.device.Reset();
+				g_gpu.context.Reset();
+				return false;
+			}
+			g_gpu.ok = true;
+			log::info("GPU decoding ready");
+			return true;
+		}
+	}
+
+	void MediaSource::SetGameDevice(ID3D11Device* a_device)
+	{
+		ComPtr<IDXGIDevice> dxgi;
+		if (a_device && SUCCEEDED(a_device->QueryInterface(IID_PPV_ARGS(&dxgi)))) {
+			std::scoped_lock lock(g_gpu.lock);
+			dxgi->GetAdapter(&g_gpu.adapter);
+		}
 	}
 
 	bool MediaSource::StartupMF()
@@ -51,14 +117,15 @@ namespace fv
 		}
 	}
 
-	bool MediaSource::Open(const std::wstring& a_path, bool a_wantAudio)
+	bool MediaSource::Open(const std::wstring& a_path, bool a_wantAudio, std::uint32_t a_maxHeight, bool a_gpu)
 	{
 		if (!StartupMF()) {
 			return false;
 		}
 		ComScope com;
+		_gpu = a_gpu && EnsureGpuDecode();
 
-		if (!OpenVideo(a_path)) {
+		if (!OpenVideo(a_path, a_maxHeight)) {
 			return false;
 		}
 		if (a_wantAudio) {
@@ -71,11 +138,22 @@ namespace fv
 		return true;
 	}
 
-	bool MediaSource::OpenVideo(const std::wstring& a_path)
+	// a_outW/H > 0: ask the decoder for frames scaled to that size (advanced video processing)
+	bool MediaSource::CreateVideoReader(const std::wstring& a_path, std::uint32_t a_outW, std::uint32_t a_outH)
 	{
+		_videoReader.Reset();
+		const bool scale = a_outW > 0 && a_outH > 0;
 		ComPtr<IMFAttributes> attrs;
-		::MFCreateAttributes(&attrs, 2);
-		attrs->SetUINT32(MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, TRUE);  // lets MF convert YUV -> RGB32 for us
+		::MFCreateAttributes(&attrs, 3);
+		if (_gpu) {
+			// decode on the graphics card; frames arrive as textures on our decode device
+			attrs->SetUnknown(MF_SOURCE_READER_D3D_MANAGER, g_gpu.manager.Get());
+			attrs->SetUINT32(MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING, TRUE);
+		} else if (scale) {
+			attrs->SetUINT32(MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING, TRUE);  // converts and resizes
+		} else {
+			attrs->SetUINT32(MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, TRUE);  // lets MF convert YUV -> RGB32 for us
+		}
 		attrs->SetUINT32(MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, TRUE);
 
 		HRESULT hr = ::MFCreateSourceReaderFromURL(a_path.c_str(), attrs.Get(), &_videoReader);
@@ -94,15 +172,46 @@ namespace fv
 		ComPtr<IMFMediaType> type;
 		::MFCreateMediaType(&type);
 		type->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
-		type->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_RGB32);
+		type->SetGUID(MF_MT_SUBTYPE, _gpu ? MFVideoFormat_ARGB32 : MFVideoFormat_RGB32);  // GPU: BGRA textures
+		if (scale) {
+			::MFSetAttributeSize(type.Get(), MF_MT_FRAME_SIZE, a_outW, a_outH);
+			::MFSetAttributeRatio(type.Get(), MF_MT_PIXEL_ASPECT_RATIO, 1, 1);
+		}
 		hr = _videoReader->SetCurrentMediaType(static_cast<DWORD>(MF_SOURCE_READER_FIRST_VIDEO_STREAM), nullptr, type.Get());
 		if (FAILED(hr)) {
-			log::error("could not get RGB32 output from the video decoder ({}). Is the codec supported by Windows?", HrStr(hr));
+			if (scale) {
+				log::warn("the decoder can't scale this video to {}x{} ({}); using its full size", a_outW, a_outH, HrStr(hr));
+			} else {
+				log::error("could not get RGB32 output from the video decoder ({}). Is the codec supported by Windows?", HrStr(hr));
+			}
+			_videoReader.Reset();
 			return false;
 		}
+		return UpdateVideoFormat();
+	}
 
-		if (!UpdateVideoFormat()) {
-			return false;
+	bool MediaSource::OpenVideo(const std::wstring& a_path, std::uint32_t a_maxHeight)
+	{
+		if (!CreateVideoReader(a_path, 0, 0)) {
+			if (!_gpu) {
+				return false;
+			}
+			log::warn("GPU decoding didn't work for this video; decoding on the CPU");
+			_gpu = false;
+			if (!CreateVideoReader(a_path, 0, 0)) {
+				return false;
+			}
+		}
+		// taller than this screen needs: open it again with the decoder scaling it down (keeps the shape)
+		if (a_maxHeight > 0 && _height > a_maxHeight) {
+			const std::uint32_t fullW = _width, fullH = _height;
+			const std::uint32_t outH = a_maxHeight & ~1u;
+			const std::uint32_t outW = static_cast<std::uint32_t>(std::lround(static_cast<double>(fullW) * outH / fullH)) & ~1u;
+			if (outW > 0 && CreateVideoReader(a_path, outW, outH)) {
+				log::info("video: {}x{} scaled down to {}x{} for this screen", fullW, fullH, _width, _height);
+			} else if (!CreateVideoReader(a_path, 0, 0)) {
+				return false;
+			}
 		}
 
 		PROPVARIANT var;
@@ -299,6 +408,15 @@ namespace fv
 		Start();
 	}
 
+	void MediaSource::SeekVideo(std::int64_t a_position)
+	{
+		if (_duration > 0) {
+			a_position = std::clamp<std::int64_t>(a_position, 0, std::max<std::int64_t>(0, _duration - 10'000'000));
+		}
+		_videoSeek = std::max<std::int64_t>(a_position, 0);
+		_frameCv.notify_all();
+	}
+
 	std::int64_t MediaSource::Clock() const
 	{
 		const auto wall = [this]() -> std::int64_t {
@@ -397,9 +515,22 @@ namespace fv
 		while (!_stop) {
 			{
 				std::unique_lock lock(_frameLock);
-				_frameCv.wait_for(lock, 20ms, [this] { return _stop.load() || _frames.size() < kMaxFrames; });
+				_frameCv.wait_for(lock, 20ms, [this] { return _stop.load() || _frames.size() < kMaxFrames || _videoSeek.load() >= 0; });
 				if (_stop) {
 					break;
+				}
+				if (const auto jump = _videoSeek.exchange(-1); jump >= 0) {
+					// picture-only jump: drop what's queued and read on from there
+					for (auto& f : _frames) {
+						_pool.push_back(std::move(f));
+					}
+					_frames.clear();
+					PROPVARIANT var;
+					::PropVariantInit(&var);
+					var.vt = VT_I8;
+					var.hVal.QuadPart = jump;
+					_videoReader->SetCurrentPosition(GUID_NULL, var);
+					_videoEOS = false;
 				}
 				if (_frames.size() >= kMaxFrames) {
 					continue;
@@ -426,11 +557,6 @@ namespace fv
 				continue;
 			}
 
-			ComPtr<IMFMediaBuffer> buffer;
-			if (FAILED(sample->ConvertToContiguousBuffer(&buffer))) {
-				continue;
-			}
-
 			std::uint32_t w, h, frameH, cropX, cropY;
 			LONG          defaultStride;
 			{
@@ -441,6 +567,36 @@ namespace fv
 				cropX = _cropX;
 				cropY = _cropY;
 				defaultStride = _stride;
+			}
+
+			if (_gpu) {
+				// the frame is a texture on our decode device: copy it into one of our shared textures
+				ComPtr<IMFMediaBuffer> gpuBuffer;
+				if (FAILED(sample->GetBufferByIndex(0, &gpuBuffer))) {
+					continue;
+				}
+				VideoFrame frame;
+				{
+					std::scoped_lock lock(_frameLock);
+					if (!_pool.empty()) {
+						frame = std::move(_pool.back());
+						_pool.pop_back();
+					}
+				}
+				frame.pts = timestamp;
+				if (GpuFrame(gpuBuffer.Get(), frame, w, h, cropX, cropY)) {
+					std::scoped_lock lock(_frameLock);
+					_frames.push_back(std::move(frame));
+				} else {
+					std::scoped_lock lock(_frameLock);
+					_pool.push_back(std::move(frame));
+				}
+				continue;
+			}
+
+			ComPtr<IMFMediaBuffer> buffer;
+			if (FAILED(sample->ConvertToContiguousBuffer(&buffer))) {
+				continue;
 			}
 
 			BYTE* scan0 = nullptr;
@@ -491,6 +647,68 @@ namespace fv
 			std::scoped_lock lock(_frameLock);
 			_frames.push_back(std::move(frame));
 		}
+	}
+
+	bool MediaSource::GpuFrame(IMFMediaBuffer* a_buffer, VideoFrame& a_frame, std::uint32_t a_w, std::uint32_t a_h, std::uint32_t a_cropX,
+		std::uint32_t a_cropY)
+	{
+		ComPtr<IMFDXGIBuffer> dxgi;
+		if (FAILED(a_buffer->QueryInterface(IID_PPV_ARGS(&dxgi)))) {
+			static bool logged = false;
+			if (!logged) {
+				logged = true;
+				log::warn("GPU decoding: the decoder handed back a CPU frame; this video stays blank");
+			}
+			return false;
+		}
+		ComPtr<ID3D11Texture2D> src;
+		UINT                    sub = 0;
+		if (FAILED(dxgi->GetResource(IID_PPV_ARGS(&src))) || FAILED(dxgi->GetSubresourceIndex(&sub))) {
+			return false;
+		}
+
+		// our shared texture for this frame (kept with the frame in the pool, remade if the size changes)
+		if (!a_frame.gpuTexture || a_frame.gpuWidth != a_w || a_frame.gpuHeight != a_h) {
+			a_frame.gpuTexture.Reset();
+			a_frame.gpuShared = nullptr;
+			a_frame.gpuKey = 0;
+			D3D11_TEXTURE2D_DESC desc{};
+			desc.Width = a_w;
+			desc.Height = a_h;
+			desc.MipLevels = 1;
+			desc.ArraySize = 1;
+			desc.Format = DXGI_FORMAT_B8G8R8A8_TYPELESS;
+			desc.SampleDesc.Count = 1;
+			desc.Usage = D3D11_USAGE_DEFAULT;
+			desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+			desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
+			if (FAILED(g_gpu.device->CreateTexture2D(&desc, nullptr, &a_frame.gpuTexture))) {
+				return false;
+			}
+			ComPtr<IDXGIResource> res;
+			if (FAILED(a_frame.gpuTexture.As(&res)) || FAILED(res->GetSharedHandle(&a_frame.gpuShared))) {
+				a_frame.gpuTexture.Reset();
+				return false;
+			}
+			a_frame.gpuWidth = a_w;
+			a_frame.gpuHeight = a_h;
+		}
+
+		ComPtr<IDXGIKeyedMutex> mutex;
+		if (FAILED(a_frame.gpuTexture.As(&mutex)) || mutex->AcquireSync(a_frame.gpuKey, 100) != S_OK) {
+			return false;  // the game still holds it; skip this frame
+		}
+		D3D11_TEXTURE2D_DESC srcDesc{};
+		src->GetDesc(&srcDesc);
+		D3D11_BOX box{ a_cropX, a_cropY, 0, std::min(a_cropX + a_w, srcDesc.Width), std::min(a_cropY + a_h, srcDesc.Height), 1 };
+		g_gpu.context->CopySubresourceRegion(a_frame.gpuTexture.Get(), 0, 0, 0, 0, src.Get(), sub, &box);
+		g_gpu.context->Flush();
+		mutex->ReleaseSync(1);
+		a_frame.gpuKey = 1;
+		a_frame.width = a_w;
+		a_frame.height = a_h;
+		a_frame.pixels.clear();
+		return true;
 	}
 
 	void MediaSource::AudioThread()

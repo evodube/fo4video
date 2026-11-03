@@ -46,6 +46,7 @@ namespace fv::Renderer
 			return false;
 		}
 		g_device->GetImmediateContext(g_context.ReleaseAndGetAddressOf());
+		MediaSource::SetGameDevice(g_device.Get());  // GPU decoding uses the same graphics card
 
 		log::info("renderer: swapChain={} device={} (RendererData device={}) context={}", static_cast<void*>(swapChain),
 			static_cast<void*>(g_device.Get()), static_cast<void*>(data->device), static_cast<void*>(g_context.Get()));

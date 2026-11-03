@@ -15,6 +15,8 @@ namespace fv
 		std::uint32_t                    width{ 0 };
 		std::uint32_t                    height{ 0 };
 		bool                             srgb{ false };
+		bool                             gpuTarget{ false };  // GPU decoding: drawn into (render target), not written by the CPU
+		ComPtr<ID3D11RenderTargetView>   rtv;
 		bool                             inUse{ false };
 
 		// patch state (render thread)
@@ -32,7 +34,7 @@ namespace fv
 		bool                             compSRGB{ false };
 		bool                             compNeedsDraw{ false };
 
-		bool Ensure(ID3D11Device* a_device, std::uint32_t a_width, std::uint32_t a_height, bool a_srgb);
+		bool Ensure(ID3D11Device* a_device, std::uint32_t a_width, std::uint32_t a_height, bool a_srgb, bool a_gpuTarget = false);
 		bool EnsureComposite(ID3D11Device* a_device, std::uint32_t a_width, std::uint32_t a_height, bool a_srgb);
 		void Upload(ID3D11DeviceContext* a_context, const std::uint8_t* a_pixels, std::uint32_t a_width, std::uint32_t a_height);
 		void Patch(int a_index, ID3D11ShaderResourceView* a_want);
@@ -73,6 +75,18 @@ namespace fv
 		int                rebindCooldown{ 0 };
 		bool               away{ false };  // further than the auto-off distance
 		std::chrono::steady_clock::time_point awaySince{};
+		bool               unseen{ false };  // far or out of view (freeze timer running)
+		std::chrono::steady_clock::time_point unseenSince{};
+		std::atomic<bool>  frozen{ false };  // picture not updated (sound carries on)
+		bool               wasFrozen{ false };  // render thread
+		// GPU decoding: the decoder's shared textures opened on the game's device (render thread)
+		struct GpuIn
+		{
+			ComPtr<ID3D11Texture2D>          texture;
+			ComPtr<IDXGIKeyedMutex>          mutex;
+			ComPtr<ID3D11ShaderResourceView> srv[2];  // [sRGB]
+		};
+		std::unordered_map<HANDLE, GpuIn> gpuIn;
 		std::uint32_t      lastVideoWidth{ 0 };
 		std::uint32_t      lastVideoHeight{ 0 };
 		bool               compositeLogged{ false };

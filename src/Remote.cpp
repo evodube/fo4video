@@ -708,13 +708,51 @@ namespace fv::Remote
 			dirty |= Checkbox("Pause in menus (Esc, Pip-Boy, loading...)", &s.pauseInMenus);
 			dirty |= Checkbox("Pause when the game is in the background (alt-tab)", &s.pauseUnfocused);
 			dirty |= SliderInt("Screens playing at once", &s.maxScreens, 1, 16, "%d");
+
+			SeparatorText("Performance");
+			{
+				// video size per kind of screen: bigger videos are scaled down while decoding (applies to videos started next)
+				const auto sizeCombo = [&](const char* a_label, int* a_value, std::initializer_list<std::pair<const char*, int>> a_choices) {
+					const char* current = "Custom";
+					for (const auto& [name, value] : a_choices) {
+						if (*a_value == value) {
+							current = name;
+						}
+					}
+					if (BeginCombo(a_label, current)) {
+						for (const auto& [name, value] : a_choices) {
+							if (Selectable(name, *a_value == value)) {
+								*a_value = value;
+								dirty = true;
+							}
+						}
+						EndCombo();
+					}
+				};
+				sizeCombo("TV video size", &s.maxHeightTV, { { "480p", 480 }, { "720p", 720 }, { "1080p", 1080 }, { "Full size", 0 } });
+				Tip("Videos taller than this are scaled down while decoding. TVs are small: 720p looks the same as 1080p there. "
+					"Applies to videos started from now on.");
+				sizeCombo("Projector video size", &s.maxHeightProjector, { { "720p", 720 }, { "1080p", 1080 }, { "1440p", 1440 }, { "Full size", 0 } });
+				Tip("Applies to videos started from now on.");
+				sizeCombo("Cinema video size", &s.maxHeightCinema, { { "1080p", 1080 }, { "4K (full size)", 0 } });
+				Tip("The drive-in screen fills a lot of your view; 4K is sharper but much more work. Applies to videos started from now on.");
+			}
+			dirty |= Checkbox("Decode videos on the graphics card (test)", &s.gpuDecode);
+			Tip("Much less work for the CPU and memory. Applies to videos started from now on. If a screen stays blank or "
+				"looks wrong, untick it and start the video again.");
+			dirty |= Checkbox("Pause the picture when far away or out of view", &s.freeze);
+			Tip("The sound carries on; the picture catches up the moment you look at it or come closer.");
+			if (s.freeze) {
+				dirty |= Meters("...further away than##freeze", &s.freezeDistance, 300.0f, "Or whenever the screen isn't in front of you.");
+				dirty |= SliderFloat("...for longer than##freeze", &s.freezeSeconds, 0.0f, 120.0f, "%.0f s");
+			}
 			dirty |= Checkbox("Turn screens off when you walk away", &s.autoOff);
 			Tip("Saves memory and frees the screen's place. It remembers the video and where it was, and carries on from there when "
 				"you come back.");
 			if (s.autoOff) {
-				dirty |= Meters("...further away than", &s.autoOffDistance, 300.0f,
+				dirty |= Meters("...further away than##off", &s.autoOffDistance, 300.0f,
 					"Never closer than you can still hear the screen (the sound distances below).");
-				dirty |= SliderFloat("...for longer than", &s.autoOffSeconds, 0.0f, 120.0f, "%.0f s");
+				dirty |= SliderFloat("...for longer than##off", &s.autoOffSeconds, 0.0f, 120.0f, "%.0f s");
 			}
 
 			SeparatorText("Picking a screen");

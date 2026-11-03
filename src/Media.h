@@ -9,7 +9,14 @@ namespace fv
 		std::int64_t              pts{ 0 };  // 100ns units
 		std::uint32_t             width{ 0 };
 		std::uint32_t             height{ 0 };
-		std::vector<std::uint8_t> pixels;  // BGRX, top-down, stride = width * 4
+		std::vector<std::uint8_t> pixels;  // BGRX, top-down, stride = width * 4 (CPU decoding)
+		// GPU decoding: the picture is in a texture shared with the game's device, guarded by a keyed mutex
+		// (the decoder releases it with key 1, the game takes it with key 1 and gives it back with key 0)
+		ComPtr<ID3D11Texture2D>   gpuTexture;
+		HANDLE                    gpuShared{ nullptr };
+		std::uint64_t             gpuKey{ 0 };  // the key it was last released with
+		std::uint32_t             gpuWidth{ 0 };
+		std::uint32_t             gpuHeight{ 0 };
 	};
 
 	// Decodes one media file with Media Foundation.
@@ -23,8 +30,12 @@ namespace fv
 		MediaSource& operator=(const MediaSource&) = delete;
 
 		static bool StartupMF();
+		// The game's device: GPU decoding uses its own device on the same graphics card.
+		static void SetGameDevice(ID3D11Device* a_device);
 
-		bool Open(const std::wstring& a_path, bool a_wantAudio);
+		// a_maxHeight > 0: bigger videos are scaled down to this height while decoding (less work everywhere after).
+		bool Open(const std::wstring& a_path, bool a_wantAudio, std::uint32_t a_maxHeight = 0, bool a_gpu = false);
+		bool OnGpu() const { return _gpu; }
 		void Start();
 		void Stop();
 
@@ -32,6 +43,8 @@ namespace fv
 		void Restart() { RestartAt(0); }
 		// Jump to a position (100ns units, clamped to the file). Render thread, like Restart.
 		void Seek(std::int64_t a_position);
+		// Jump the picture only (the sound keeps playing): used when a frozen screen comes back to life.
+		void SeekVideo(std::int64_t a_position);
 
 		// Playback clock in 100ns units (audio-driven when there is audio).
 		std::int64_t Clock() const;
@@ -49,9 +62,13 @@ namespace fv
 		std::uint32_t Height() const { return _height; }
 		std::int64_t  Duration() const { return _duration; }
 		bool          HasAudio() const { return _audio != nullptr && _audio->Valid(); }
+		bool          VideoEnded() const { return _videoEOS.load(); }
 
 	private:
-		bool OpenVideo(const std::wstring& a_path);
+		bool OpenVideo(const std::wstring& a_path, std::uint32_t a_maxHeight);
+		bool CreateVideoReader(const std::wstring& a_path, std::uint32_t a_outW, std::uint32_t a_outH);
+		bool GpuFrame(IMFMediaBuffer* a_buffer, VideoFrame& a_frame, std::uint32_t a_w, std::uint32_t a_h, std::uint32_t a_cropX,
+			std::uint32_t a_cropY);
 		bool OpenAudio(const std::wstring& a_path);
 		bool UpdateVideoFormat();
 
@@ -60,6 +77,7 @@ namespace fv
 		void AudioThread();
 
 		// video
+		bool                    _gpu{ false };  // decoding into GPU textures
 		ComPtr<IMFSourceReader> _videoReader;
 		std::uint32_t           _width{ 0 };
 		std::uint32_t           _height{ 0 };
@@ -75,6 +93,7 @@ namespace fv
 		std::deque<VideoFrame>  _frames;
 		std::vector<VideoFrame> _pool;
 		std::atomic<bool>       _videoEOS{ false };
+		std::atomic<std::int64_t> _videoSeek{ -1 };  // picture-only jump waiting for the video thread
 
 		// audio
 		ComPtr<IMFSourceReader>      _audioReader;
