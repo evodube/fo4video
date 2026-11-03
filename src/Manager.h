@@ -58,7 +58,8 @@ namespace fv
 		SourceKind                   kind{ SourceKind::kTestPattern };
 		std::wstring                 file;
 		bool                         loop{ true };
-		std::unique_ptr<MediaSource> media;
+		std::unique_ptr<MediaSource> media;          // null while the video is still being opened in the background
+		std::uint64_t                serial{ 0 };      // tells a reused Player address apart from this one
 		std::vector<std::uint8_t>    pattern;  // test pattern pixels
 
 		ScreenBinding      binding;  // main thread only
@@ -199,6 +200,8 @@ namespace fv
 		RE::ObjectRefHandle _playerWorkshop;  // the settlement you're standing in (none = outside any)
 		bool                _playerWorkshopKnown{ false };
 		std::vector<Sleeper> _sleepers;
+		std::chrono::steady_clock::time_point _lastWake{};  // saved screens come back one at a time, not all in one frame
+		std::uint64_t        _nextSerial{ 1 };
 		int  FreeSlot() const;
 		void StopLocked(Player& a_player);
 		void PollHotkeys();

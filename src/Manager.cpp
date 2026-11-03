@@ -26,6 +26,62 @@ namespace fv
 			}
 		}
 
+		// Opening a video (Media Foundation source readers, the hardware decoder, seeking to where it was) can take
+		// a good part of a second. It used to happen on the game's main thread, so loading a save with several screens
+		// playing froze the game while they all opened at once. Now one background thread opens them one after another
+		// and each screen starts as soon as its own video is ready.
+		class Opener
+		{
+		public:
+			static Opener& Get()
+			{
+				static Opener o;
+				return o;
+			}
+
+			void Add(std::function<void()> a_job)
+			{
+				{
+					std::scoped_lock lock(_m);
+					_jobs.push_back(std::move(a_job));
+					if (!_thread.joinable()) {
+						_thread = std::thread([this] { Run(); });
+						_thread.detach();
+					}
+				}
+				_cv.notify_one();
+			}
+
+		private:
+			void Run()
+			{
+				for (;;) {
+					std::function<void()> job;
+					{
+						std::unique_lock lock(_m);
+						_cv.wait(lock, [this] { return !_jobs.empty(); });
+						job = std::move(_jobs.front());
+						_jobs.pop_front();
+					}
+					job();
+				}
+			}
+
+			std::mutex                        _m;
+			std::condition_variable           _cv;
+			std::deque<std::function<void()>> _jobs;
+			std::thread                       _thread;
+		};
+
+		void NotifyLater(std::string a_message)
+		{
+			if (auto* tasks = F4SE::GetTaskInterface()) {
+				tasks->AddTask([m = std::move(a_message)]() { Notify(m); });
+			} else {
+				log::info("{}", a_message);
+			}
+		}
+
 		// The settlement whose build area holds a_pos (looked for around a_near), or nullptr when it's outside any.
 		// Works for modded settlements too: it asks the game's own workshop system.
 		RE::TESObjectREFR* SettlementAt(const RE::TESObjectREFR& a_near, const RE::NiPoint3& a_pos)
@@ -614,18 +670,62 @@ namespace fv
 		player->screenAspect = player->binding.screenAspect;
 
 		// opened once the screen is known: TVs, projectors and the cinema each have their own size limit
+		std::function<void()> openJob;
 		if (a_kind == SourceKind::kVideo) {
 			const auto& settings = Settings::Get();
 			const int   maxH = player->binding.classic ? settings.maxHeightTV :
 			                   player->binding.bigScreen ? settings.maxHeightCinema :
 			                                               settings.maxHeightProjector;
-			player->media = std::make_unique<MediaSource>();
-			if (!player->media->Open(a_file, settings.enableAudio, static_cast<std::uint32_t>(std::max(0, maxH)), settings.gpuDecode && !Compositor::Get().Failed())) {
-				Notify(std::format("Real Videos: could not decode {}", Narrow(std::filesystem::path(a_file).filename().wstring())));
-				Screen::Unbind(player->binding);
-				releaseSlot();
-				return false;
-			}
+			const bool gpu = settings.gpuDecode && !Compositor::Get().Failed();
+			const bool audio = settings.enableAudio;
+			const auto height = static_cast<std::uint32_t>(std::max(0, maxH));
+			const auto serial = player->serial = _nextSerial++;
+			Player*    target = player.get();
+			// opened in the background (see Opener); the screen shows its dark placeholder until the video is ready
+			openJob = [this, target, serial, file = a_file, audio, height, gpu, refName]() {
+				const auto alive = [&]() {
+					return std::ranges::any_of(_players, [&](const auto& p) { return p.get() == target && p->serial == serial && !p->stopping; });
+				};
+				{
+					std::scoped_lock lock(_lock);
+					if (!alive()) {
+						return;  // stopped before its turn came
+					}
+				}
+				auto media = std::make_unique<MediaSource>();
+				if (!media->Open(file, audio, height, gpu)) {
+					NotifyLater(std::format("Real Videos: could not decode {}", Narrow(std::filesystem::path(file).filename().wstring())));
+					std::scoped_lock lock(_lock);
+					if (alive()) {
+						StopLocked(*target);
+					}
+					return;
+				}
+				// carry on from the saved spot here too: seeking costs as much as opening
+				std::int64_t startAt = 0;
+				bool         paused = false;
+				{
+					std::scoped_lock lock(_lock);
+					if (!alive()) {
+						return;
+					}
+					startAt = target->seekDelta.exchange(0);
+					paused = target->userPaused.load();
+				}
+				media->SetPaused(paused);
+				if (startAt > 0) {
+					media->Seek(startAt);  // starts it too
+				} else {
+					media->Start();
+				}
+				std::scoped_lock lock(_lock);
+				if (alive()) {
+					target->media = std::move(media);
+					log::info("{}: video ready", refName);
+				} else {
+					std::thread([m = std::move(media)]() mutable { m.reset(); }).detach();
+				}
+			};
 			// another screen already playing this video: start in step with it
 			if (settings.syncSameVideo && a_startAt == 0) {
 				std::scoped_lock lock(_lock);
@@ -640,7 +740,6 @@ namespace fv
 			}
 		}
 
-		Player* raw = player.get();
 		{
 			std::scoped_lock lock(_lock);
 			_slots[slot].niTexture = slotTexture;
@@ -649,8 +748,8 @@ namespace fv
 			_glowSlots[slot].refusedLogged = false;
 			_players.push_back(std::move(player));
 		}
-		if (raw->media) {
-			raw->media->Start();
+		if (openJob) {
+			Opener::Get().Add(std::move(openJob));  // only once the player is in the list it looks for
 		}
 
 		if (a_quiet) {
@@ -974,7 +1073,7 @@ namespace fv
 						s.kind = p->kind;
 						s.file = p->file;
 						s.loop = p->loop;
-						s.position = p->media ? p->media->Clock() : 0;
+						s.position = p->media ? p->media->Clock() : p->seekDelta.load();
 						s.where = where;
 						s.wakeDistance = limit * 0.9f;  // a little closer than where it turned off, so it doesn't flicker on/off
 						s.name = p->name;
@@ -1062,40 +1161,51 @@ namespace fv
 			}
 		}
 
-		// screens that turned off while you were away: back on, where they were, once you're close again
+		// screens that turned off while you were away (or saved playing): back on, where they were, once you're close
+		// again. Only one every 0.3 s, nearest first, so loading a save with lots of screens doesn't hit the game at once.
 		if (!buildMode && player) {
+			const auto now = std::chrono::steady_clock::now();
+			auto       best = _sleepers.end();
+			float      bestDist = FLT_MAX;
 			for (auto it = _sleepers.begin(); it != _sleepers.end();) {
 				auto ref = it->ref.get();
 				if (!ref || ref->IsDeleted() || ref->IsDisabled()) {
 					log::info("{}: gone while it was off; forgetting it", it->name);
 					it = _sleepers.erase(it);
+					best = _sleepers.end();  // iterators moved; look again next time
+					bestDist = FLT_MAX;
 					continue;
 				}
 				const float dx = it->where.x - playerPos.x, dy = it->where.y - playerPos.y, dz = it->where.z - playerPos.z;
-				const bool  isNear = std::sqrt(dx * dx + dy * dy + dz * dz) < it->wakeDistance;
+				const float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+				const bool  isNear = dist < it->wakeDistance;
 				// a screen in a settlement comes back when you're in that settlement, or close by outside any
 				// settlement; while you're in another settlement it stays off even if that one is next door
 				auto       mine = it->workshop.get();
 				auto       here = _playerWorkshopKnown ? _playerWorkshop.get() : RE::NiPointer<RE::TESObjectREFR>{};
 				const bool elsewhere = settings.offInOtherSettlement && mine && here && here.get() != mine.get();
 				const bool wake = (!(it->cinema ? settings.cinemaAutoOff : settings.autoOff) || isNear) && !elsewhere;
-				if (wake && ref->Get3D()) {
-					if (auto* tasks = F4SE::GetTaskInterface()) {
-						tasks->AddTask([this, s = *it]() {
-							if (auto r = s.ref.get(); r && Start(r.get(), s.kind, s.file, s.loop, s.position, true) && s.paused) {
-								std::scoped_lock lock(_lock);
-								for (auto& p : _players) {
-									if (!p->stopping && Is(*p, s.formID)) {
-										p->userPaused = true;
-									}
-								}
-							}
-						});
-					}
-					it = _sleepers.erase(it);
-					continue;
+				if (wake && ref->Get3D() && dist < bestDist) {
+					best = it;
+					bestDist = dist;
 				}
 				++it;
+			}
+			if (best != _sleepers.end() && now - _lastWake >= std::chrono::milliseconds(300)) {
+				_lastWake = now;
+				if (auto* tasks = F4SE::GetTaskInterface()) {
+					tasks->AddTask([this, s = *best]() {
+						if (auto r = s.ref.get(); r && Start(r.get(), s.kind, s.file, s.loop, s.position, true) && s.paused) {
+							std::scoped_lock lock(_lock);
+							for (auto& p : _players) {
+								if (!p->stopping && Is(*p, s.formID)) {
+									p->userPaused = true;
+								}
+							}
+						}
+					});
+				}
+				_sleepers.erase(best);
 			}
 		}
 	}
