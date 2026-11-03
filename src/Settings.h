@@ -49,8 +49,7 @@ namespace fv
 		float selfLitBrightness{ 1.0f };
 		bool  selfLitLatePass{ true };
 		bool  selfLitFaceOnly{ true };       // only the picture glows (a glowing copy over it); frame keeps normal lighting
-		float frameDay{ 2.0f };              // glowing projectors: back/frame/pole = the world's light times this by day
-		float frameNight{ 1.0f };            // ... and this at night (blended through dawn and dusk)
+		float frameLight{ 1.0f };            // glowing projectors: back/frame/pole follow the world's light, times this
 		float bigScreenVHS{ 0.5f };          // big screens: VHS tape look, 0 = off, 1 = strong
 		float startVolume{ 0.5f };           // volume each screen starts at (the remote's middle button)
 		float bigMinDistance{ 1500.0f };
