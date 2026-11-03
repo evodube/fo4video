@@ -1163,6 +1163,18 @@ namespace fv::Screen
 			created->SetFlag(F::kSkinned, a_litProp->flags.all(F::kSkinned));
 			created->SetFlag(F::kTwoSided, a_litProp->flags.all(F::kTwoSided));
 			created->SetFlag(F::kEffectLighting, false);
+			// no soft-particle fading (it faded the picture to see-through wherever something stood just behind
+			// the screen, e.g. the drive-in's catwalk along its top), no falloff, no alpha tricks
+			created->SetFlag(F::kSoftEffect, false);
+			created->SetFlag(F::kFalloff, false);
+			created->SetFlag(F::kRGBFalloff, false);
+			created->SetFlag(F::kVertexAlpha, false);
+			created->SetFlag(F::kScreendoorAlphaFade, false);
+			created->SetFlag(F::kRefraction, false);
+			created->SetFlag(F::kEnvMap, false);
+			em->softFalloffDepth = 0.0f;
+			em->falloffStartOpacity = 1.0f;
+			em->falloffStopOpacity = 1.0f;
 			created->SetFlag(F::kGrayscaleToPaletteColor, false);
 			created->SetFlag(F::kGrayscaleToPaletteAlpha, false);
 			if (!created->SetupGeometry(a_geom)) {
