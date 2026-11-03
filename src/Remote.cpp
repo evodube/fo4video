@@ -759,119 +759,52 @@ namespace fv::Remote
 
 	namespace
 	{
-		// While the remote is open: give the keyboard back to the game for walking (the menu framework tells the
-		// game to ignore keyboard and mouse), but switch off looking, attacking, activating, menus and the rest
-		// with an input-enable layer, so the mouse only drives the remote.
-		// --- W/A/S/D allowlist ---------------------------------------------------------------------------------
-		// The menu framework swallows every window message while its mouse-taking windows are open. W/A/S/D
-		// key messages (and raw keyboard input for those keys) are handed straight to the game's own window
-		// procedure instead, past the framework, while the remote is open.
-		WNDPROC g_nextProc = nullptr;
-		WNDPROC g_gameProc = nullptr;
-
-		bool IsWalkKey(WPARAM a_vk) { return a_vk == 'W' || a_vk == 'A' || a_vk == 'S' || a_vk == 'D'; }
-
-		LRESULT CALLBACK RemoteWndProc(HWND a_wnd, UINT a_msg, WPARAM a_w, LPARAM a_l)
-		{
-			if (g_window && g_window->IsOpen.load() && g_gameProc) {
-				if ((a_msg == WM_KEYDOWN || a_msg == WM_KEYUP) && IsWalkKey(a_w)) {
-					return ::CallWindowProcW(g_gameProc, a_wnd, a_msg, a_w, a_l);
-				}
-				if (a_msg == WM_INPUT) {
-					RAWINPUT raw{};
-					UINT     size = sizeof(raw);
-					if (::GetRawInputData(reinterpret_cast<HRAWINPUT>(a_l), RID_INPUT, &raw, &size, sizeof(RAWINPUTHEADER)) != static_cast<UINT>(-1) &&
-						raw.header.dwType == RIM_TYPEKEYBOARD && IsWalkKey(raw.data.keyboard.VKey)) {
-						return ::CallWindowProcW(g_gameProc, a_wnd, a_msg, a_w, a_l);
-					}
-				}
-			}
-			return ::CallWindowProcW(g_nextProc, a_wnd, a_msg, a_w, a_l);
-		}
-
-		void InstallWalkKeys()  // main thread
-		{
-			static bool done = false;
-			if (done) {
-				return;
-			}
-			const HWND wnd = ::GetActiveWindow();
-			if (!wnd) {
-				return;
-			}
-			done = true;
-			g_gameProc = reinterpret_cast<WNDPROC>(::GetClassLongPtrW(wnd, GCLP_WNDPROC));
-			g_nextProc = reinterpret_cast<WNDPROC>(::SetWindowLongPtrW(wnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(&RemoteWndProc)));
-			log::info("remote: W/A/S/D reach the game while the remote is open");
-		}
-
+		// While the remote is open the menu framework makes the game ignore keyboard and mouse (good: the mouse
+		// only drives the remote). Walking is fed in directly from the held W/A/S/D keys.
 		void GameInputForRemote(bool a_open)
 		{
-			using UE = RE::UserEvents::USER_EVENT_FLAG;
-			static RE::BSTSmartPointer<RE::BSInputEnableLayer> layer;
-			static bool                                        blocked = false;
-			auto*                                              inputs = RE::BSInputEnableManager::GetSingleton();
-			if (!inputs) {
+			auto* pc = RE::PlayerControls::GetSingleton();
+			if (!pc) {
 				return;
 			}
-			if (!layer) {
-				inputs->AllocateNewLayer(layer, "RealVideos remote");
+			static bool walking = false;
+			if (!a_open) {
+				if (walking) {
+					pc->data.moveInputVec = RE::NiPoint2(0.0f, 0.0f);  // stop when the remote closes
+					walking = false;
+				}
+				return;
 			}
-			const auto flags = static_cast<UE>(static_cast<std::int32_t>(UE::kLooking) | static_cast<std::int32_t>(UE::kActivate) |
-											   static_cast<std::int32_t>(UE::kMenu) | static_cast<std::int32_t>(UE::kConsole) |
-											   static_cast<std::int32_t>(UE::kPOVSwitch) | static_cast<std::int32_t>(UE::kFighting) |
-											   static_cast<std::int32_t>(UE::kSneaking) | static_cast<std::int32_t>(UE::kMainFour) |
-											   static_cast<std::int32_t>(UE::kWheelZoom) | static_cast<std::int32_t>(UE::kJumping) |
-											   static_cast<std::int32_t>(UE::kVATS));
-			if (a_open) {
-				if (g_unfreezeFrames > 0) {
-					--g_unfreezeFrames;
-					if (auto* ui = RE::UI::GetSingleton(); ui && ui->menuMode == g_menuModeBase + 1) {
-						ui->menuMode -= 1;  // the framework's own guard keeps its -1 on close from going below zero
-						g_unfreezeFrames = 0;
-						log::info("remote: game keeps running while the remote is open");
-					}
+			if (g_unfreezeFrames > 0) {
+				--g_unfreezeFrames;
+				if (auto* ui = RE::UI::GetSingleton(); ui && ui->menuMode == g_menuModeBase + 1) {
+					ui->menuMode -= 1;  // the framework's own guard keeps its -1 on close from going below zero
+					g_unfreezeFrames = 0;
+					log::info("remote: game keeps running while the remote is open");
 				}
-				if (layer && !blocked) {
-					inputs->EnableUserEvent(layer->layerID, flags, false, RE::UserEvents::SENDER_ID::kGameplay);
-					blocked = true;
-				}
-				if (auto* controls = RE::ControlMap::GetSingleton()) {
-					controls->ignoreKeyboardMouse = false;  // the framework set it when the remote opened
-				}
-				InstallWalkKeys();
+			}
 
-				// and drive the walk directly too, in case the game still doesn't see the keys
-				static bool walking = false;
-				auto        down = [](int a_vk) { return (::GetAsyncKeyState(a_vk) & 0x8000) != 0; };
-				float       y = (down('W') ? 1.0f : 0.0f) - (down('S') ? 1.0f : 0.0f);
-				float       x = (down('D') ? 1.0f : 0.0f) - (down('A') ? 1.0f : 0.0f);
-				if (x != 0.0f && y != 0.0f) {
-					x *= 0.7071f;
-					y *= 0.7071f;
-				}
-				auto* pc = RE::PlayerControls::GetSingleton();
-				if (pc && (x != 0.0f || y != 0.0f || walking)) {
-					pc->data.moveInputVec = RE::NiPoint2(x, y);
-					walking = x != 0.0f || y != 0.0f;
-				}
+			DWORD pid = 0;
+			::GetWindowThreadProcessId(::GetForegroundWindow(), &pid);
+			const bool focused = pid == ::GetCurrentProcessId();
+			auto       down = [&](int a_vk) { return focused && (::GetAsyncKeyState(a_vk) & 0x8000) != 0; };
+			float      y = (down('W') ? 1.0f : 0.0f) - (down('S') ? 1.0f : 0.0f);
+			float      x = (down('D') ? 1.0f : 0.0f) - (down('A') ? 1.0f : 0.0f);
+			if (x != 0.0f && y != 0.0f) {
+				x *= 0.7071f;
+				y *= 0.7071f;
+			}
+			if (x != 0.0f || y != 0.0f || walking) {
+				pc->data.moveInputVec = RE::NiPoint2(x, y);
+				walking = x != 0.0f || y != 0.0f;
+			}
 
-				// what the game sees, every ~2 s while the remote is open (for the log)
-				static int frame = 0;
-				if (++frame % 120 == 1) {
-					auto* ui = RE::UI::GetSingleton();
-					auto* cm = RE::ControlMap::GetSingleton();
-					log::info("remote: menuMode={} ignoreKeyboardMouse={} W held={} move=({:.2f},{:.2f})", ui ? ui->menuMode : 0u,
-						cm ? cm->ignoreKeyboardMouse : false, down('W'), pc ? pc->data.moveInputVec.x : 0.0f, pc ? pc->data.moveInputVec.y : 0.0f);
-				}
-			} else {
-				if (layer && blocked) {
-					inputs->EnableUserEvent(layer->layerID, flags, true, RE::UserEvents::SENDER_ID::kGameplay);
-					blocked = false;
-				}
-				if (auto* pc = RE::PlayerControls::GetSingleton()) {
-					pc->data.moveInputVec = RE::NiPoint2(0.0f, 0.0f);  // stop walking when the remote closes
-				}
+			static int frame = 0;
+			if (++frame % 120 == 1) {
+				auto* ui = RE::UI::GetSingleton();
+				auto* cm = RE::ControlMap::GetSingleton();
+				log::info("remote: menuMode={} ignoreKeyboardMouse={} W held={} move=({:.2f},{:.2f}) blockPlayerInput={}", ui ? ui->menuMode : 0u,
+					cm ? cm->ignoreKeyboardMouse : false, down('W'), pc->data.moveInputVec.x, pc->data.moveInputVec.y, pc->blockPlayerInput);
 			}
 		}
 	}
