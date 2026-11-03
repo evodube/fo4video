@@ -696,8 +696,6 @@ namespace fv::Remote
 			dirty |= Percent("Projector back/frame/pole brightness", &s.frameLight, 3.0f,
 				"The parts of a glowing projector screen that aren't the picture follow the game's light (weather, time of day). "
 				"100% = matched to it; lower if they still look too bright, higher if too dark.");
-			dirty |= Checkbox("Glow only the picture (frame and posts keep normal lighting)", &s.selfLitFaceOnly);
-			Tip("Off: the whole screen mesh glows and its frame is dimmed with the slider below. Press Apply below.");
 			dirty |= Checkbox("Cinema: stretch to fill the screen", &s.bigScreenStretch);
 			dirty |= Percent("Cinema brightness", &s.bigScreenBrightness, 4.0f, "100% = as is, up to 400%. Only the drive-in screen. Applies right away.");
 			dirty |= Percent("Cinema VHS look", &s.bigScreenVHS, 1.0f, "Soft picture, colour bleed, faded colours, faint scanlines. 0% = off.");

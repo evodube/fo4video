@@ -1681,7 +1681,8 @@ namespace fv::Screen
 
 		a_binding.geometryName = candidates[index].name;
 		if (settings.selfLit && !a_binding.isEffect && !a_binding.classic && geom->IsTriShape()) {
-			const bool faceOnly = settings.selfLitFaceOnly && a_binding.composite && a_binding.faceCount >= 1 && !UsesAlpha(geom) &&
+			// The glowing copy (picture only) never showed up in game, so it stays off whatever the INI says.
+			const bool faceOnly = false && settings.selfLitFaceOnly && a_binding.composite && a_binding.faceCount >= 1 && !UsesAlpha(geom) &&
 			                      !prop->flags.all(RE::BSShaderProperty::EShaderPropertyFlag::kSkinned);
 			MakeSelfLit(a_binding, geom, prop, mat, a_slotTexture, faceOnly);
 		}
