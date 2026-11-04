@@ -19,6 +19,7 @@ namespace fv::Remote
 		// open. For the remote we take that +1 back, so the world keeps running and you can walk (main thread).
 		std::uint32_t g_menuModeBase = 0;
 		int           g_unfreezeFrames = 0;  // frames left to spot the framework's +1 after opening
+		std::atomic<bool> g_drawnSinceOpen{ true };  // logs the first frame the remote is drawn after F6
 		std::atomic<std::uint32_t> g_target{ 0 };
 
 		std::mutex               g_lock;  // guards the strings below (written on the main thread, read when drawing)
@@ -47,6 +48,19 @@ namespace fv::Remote
 			}
 		}
 
+		// the same, for a button press: logged when it's sent and when the game runs it (sliders aren't, they'd flood the log)
+		void OnMainLogged(std::function<void()> a_fn)
+		{
+			if (auto* tasks = F4SE::GetTaskInterface()) {
+				log::info("remote: sent to the game");
+				tasks->AddTask([fn = std::move(a_fn)]() {
+					log::info("game: running it");
+					fn();
+					log::info("game: done");
+				});
+			}
+		}
+
 		std::string Narrow(const std::wstring& a_str)
 		{
 			if (a_str.empty()) {
@@ -65,9 +79,14 @@ namespace fv::Remote
 			if (!tasks || a_formID == 0) {
 				return;
 			}
+			log::info("remote: sent to the game");
 			tasks->AddTask([a_formID, fn = std::move(a_fn)]() {
 				if (auto* ref = RE::TESForm::GetFormByID<RE::TESObjectREFR>(a_formID); ref && ref->Get3D()) {
+					log::info("game: running it on {}", Screen::RefName(ref));
 					fn(ref);
+					log::info("game: done");
+				} else {
+					log::info("game: that screen isn't loaded any more; nothing to do");
 				}
 			});
 		}
@@ -591,26 +610,54 @@ namespace fv::Remote
 			Line(c, kDesignW - 22, 22, kDesignW - 52, 52, 6, a_hover == Key::kClose ? kText : IM_COL32(110, 110, 110, 255));
 		}
 
-		void Press(Key a_key, std::uint32_t a_target, const RemoteView& a_view)
+		const char* KeyName(Key a_key)
 		{
 			switch (a_key) {
+			case Key::kRewind: return "REWIND";
+			case Key::kPlayPause: return "PLAY/PAUSE";
+			case Key::kForward: return "FAST FORWARD";
+			case Key::kUp: return "VOLUME UP";
+			case Key::kDown: return "VOLUME DOWN";
+			case Key::kLeft: return "PREVIOUS";
+			case Key::kRight: return "NEXT";
+			case Key::kCenter: return "MUTE";
+			case Key::kPower: return "POWER";
+			case Key::kHome: return "HOME";
+			case Key::kSearch: return "SEARCH";
+			case Key::kName: return "NAME BAR";
+			case Key::kClose: return "CLOSE";
+			case Key::kLock: return "LOCK";
+			case Key::kResize: return "RESIZE";
+			case Key::kOpacity: return "OPACITY";
+			case Key::kBright: return "BRIGHTNESS";
+			case Key::kSeek: return "SEEK BAR";
+			case Key::kAll: return "ALL";
+			case Key::kPlaylists: return "PLAYLISTS";
+			default: return "nothing";
+			}
+		}
+
+		void Press(Key a_key, std::uint32_t a_target, const RemoteView& a_view)
+		{
+			log::info("remote: clicked {}", KeyName(a_key));
+			switch (a_key) {
 			case Key::kRewind:
-				OnMain([a_target, x = -10.0f]() { Manager::Get().RemoteSeek(a_target, x); });
+				OnMainLogged([a_target, x = -10.0f]() { Manager::Get().RemoteSeek(a_target, x); });
 				break;
 			case Key::kForward:
-				OnMain([a_target, x = +10.0f]() { Manager::Get().RemoteSeek(a_target, x); });
+				OnMainLogged([a_target, x = +10.0f]() { Manager::Get().RemoteSeek(a_target, x); });
 				break;
 			case Key::kPlayPause:
 				Post(a_target, [](RE::TESObjectREFR* a_ref) { Manager::Get().RemotePlayPause(a_ref); });
 				break;
 			case Key::kUp:
-				OnMain([a_target, x = std::min(2.0f, std::round((a_view.volume + 0.1f) * 10.0f) / 10.0f)]() { Manager::Get().RemoteSetVolume(a_target, x); });
+				OnMainLogged([a_target, x = std::min(2.0f, std::round((a_view.volume + 0.1f) * 10.0f) / 10.0f)]() { Manager::Get().RemoteSetVolume(a_target, x); });
 				if (a_view.muted) {
-					OnMain([a_target, x = false]() { Manager::Get().RemoteSetMuted(a_target, x); });
+					OnMainLogged([a_target, x = false]() { Manager::Get().RemoteSetMuted(a_target, x); });
 				}
 				break;
 			case Key::kDown:
-				OnMain([a_target, x = std::max(0.0f, std::round((a_view.volume - 0.1f) * 10.0f) / 10.0f)]() { Manager::Get().RemoteSetVolume(a_target, x); });
+				OnMainLogged([a_target, x = std::max(0.0f, std::round((a_view.volume - 0.1f) * 10.0f) / 10.0f)]() { Manager::Get().RemoteSetVolume(a_target, x); });
 				break;
 			case Key::kLeft:
 				Post(a_target, [](RE::TESObjectREFR* a_ref) { Manager::Get().RemoteStep(a_ref, -1); });
@@ -619,7 +666,7 @@ namespace fv::Remote
 				Post(a_target, [](RE::TESObjectREFR* a_ref) { Manager::Get().RemoteStep(a_ref, +1); });
 				break;
 			case Key::kCenter:
-				OnMain([a_target, x = !a_view.muted]() { Manager::Get().RemoteSetMuted(a_target, x); });
+				OnMainLogged([a_target, x = !a_view.muted]() { Manager::Get().RemoteSetMuted(a_target, x); });
 				break;
 			case Key::kPower:
 				Post(a_target, [](RE::TESObjectREFR* a_ref) { Manager::Get().RemotePower(a_ref); });
@@ -642,7 +689,7 @@ namespace fv::Remote
 				break;
 			case Key::kBright:
 				if (a_view.brightenable) {
-					OnMain([a_target, x = BrightStep(a_view.brightness, +1)]() { Manager::Get().RemoteSetBrightness(a_target, x); });
+					OnMainLogged([a_target, x = BrightStep(a_view.brightness, +1)]() { Manager::Get().RemoteSetBrightness(a_target, x); });
 				}
 				break;
 			case Key::kClose:
@@ -890,6 +937,9 @@ namespace fv::Remote
 
 		void __stdcall RenderWindow()
 		{
+			if (!g_drawnSinceOpen.exchange(true)) {
+				log::info("remote: window drawn for the first time");
+			}
 			const auto target = g_target.load();
 			const auto view = Manager::Get().View(target);
 			auto*      viewport = GetMainViewport();
@@ -985,6 +1035,7 @@ namespace fv::Remote
 
 				if (IsKeyPressed(ImGuiKey_Escape, false)) {
 					open = false;
+					log::info("remote: closed (Esc)");
 				}
 			}
 			End();
@@ -1332,9 +1383,13 @@ namespace fv::Remote
 			if (g_unfreezeFrames > 0) {
 				--g_unfreezeFrames;
 				if (auto* ui = RE::UI::GetSingleton(); ui && ui->menuMode == g_menuModeBase + 1) {
+					log::info("remote: menu framework paused the game -> taking that back");
 					ui->menuMode -= 1;  // the framework's own guard keeps its -1 on close from going below zero
 					g_unfreezeFrames = 0;
 					log::info("remote: game keeps running while the remote is open");
+				} else if (g_unfreezeFrames == 0) {
+					log::info("remote: the menu framework didn't pause the game (menu mode {} -> {}); nothing to take back",
+						g_menuModeBase, ui ? ui->menuMode : 0u);
 				}
 			}
 		}
@@ -1399,6 +1454,7 @@ namespace fv::Remote
 
 	void Toggle()
 	{
+		log::info("remote: remote key pressed (remote {})", !g_window ? "unavailable" : g_window->IsOpen ? "open" : "closed");
 		if (!g_window) {
 			Notify("Real Videos: the remote needs F4SE Menu Framework");
 			return;
@@ -1408,9 +1464,11 @@ namespace fv::Remote
 				CursorMode(true);  // walking: F6 brings the cursor back first
 			} else {
 				g_window->IsOpen = false;
+				log::info("remote: closed");
 			}
 			return;
 		}
+		log::info("remote: looking for the screen under the crosshair");
 		auto ref = Manager::Get().Target();
 		if (!ref) {
 			Notify("Real Videos: aim at a TV, projector or cinema screen first");
@@ -1421,10 +1479,12 @@ namespace fv::Remote
 			Notify("Real Videos: that isn't a TV, projector or cinema screen");
 			return;
 		}
+		log::info("remote: found {}", Screen::RefName(ref.get()));
 		RefreshVideoList();
 		{
 			std::scoped_lock lock(g_lock);
 			g_targetName = Screen::RefName(ref.get());
+			log::info("remote: video list read ({} video{})", g_videoFiles.size(), g_videoFiles.size() == 1 ? "" : "s");
 		}
 		g_target = ref->GetFormID();
 		if (auto* ui = RE::UI::GetSingleton()) {
@@ -1432,6 +1492,8 @@ namespace fv::Remote
 			g_unfreezeFrames = 60;
 		}
 		g_window->BlockUserInput = true;  // opens in cursor mode
+		g_drawnSinceOpen = false;
+		log::info("remote: opening the window");
 		g_window->IsOpen = true;
 	}
 }
