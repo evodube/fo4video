@@ -123,6 +123,15 @@ namespace fv
 		return state.SamplesPlayed;
 	}
 
+	bool AudioStream::SetSampleRate(std::uint32_t a_rate)
+	{
+		if (!_voice || a_rate == 0 || FAILED(_voice->SetSourceSampleRate(a_rate))) {
+			return false;
+		}
+		_sampleRate = a_rate;
+		return true;
+	}
+
 	void AudioStream::Start()
 	{
 		if (_voice && !_running) {

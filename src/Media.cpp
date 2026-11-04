@@ -296,15 +296,33 @@ namespace fv
 			return false;
 		}
 
+		// Ask for one fixed format: 48 kHz, stereo, 16 bit. The source reader resamples / remixes to it.
+		// Just asking for "PCM" lets the decoder pick, and some AAC tracks (HE-AAC, common in 30 fps phone and web
+		// videos) report one sample rate or channel count up front and then decode at another. The voice was made for
+		// the first, so the sound played too fast (chipmunk voices) and the video, which follows the sound, sped up too.
 		ComPtr<IMFMediaType> type;
 		::MFCreateMediaType(&type);
 		type->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Audio);
 		type->SetGUID(MF_MT_SUBTYPE, MFAudioFormat_PCM);
 		type->SetUINT32(MF_MT_AUDIO_BITS_PER_SAMPLE, 16);
+		type->SetUINT32(MF_MT_AUDIO_NUM_CHANNELS, 2);
+		type->SetUINT32(MF_MT_AUDIO_SAMPLES_PER_SECOND, 48000);
+		type->SetUINT32(MF_MT_AUDIO_BLOCK_ALIGNMENT, 4);
+		type->SetUINT32(MF_MT_AUDIO_AVG_BYTES_PER_SECOND, 48000 * 4);
+		type->SetUINT32(MF_MT_ALL_SAMPLES_INDEPENDENT, TRUE);
 		hr = _audioReader->SetCurrentMediaType(static_cast<DWORD>(MF_SOURCE_READER_FIRST_AUDIO_STREAM), nullptr, type.Get());
 		if (FAILED(hr)) {
-			log::warn("audio decoder can't output PCM ({})", HrStr(hr));
-			return false;
+			// older / unusual decoders: let it pick (the format is then checked again while playing)
+			log::info("audio: can't convert to 48 kHz stereo ({}); using the track's own format", HrStr(hr));
+			::MFCreateMediaType(type.ReleaseAndGetAddressOf());
+			type->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Audio);
+			type->SetGUID(MF_MT_SUBTYPE, MFAudioFormat_PCM);
+			type->SetUINT32(MF_MT_AUDIO_BITS_PER_SAMPLE, 16);
+			hr = _audioReader->SetCurrentMediaType(static_cast<DWORD>(MF_SOURCE_READER_FIRST_AUDIO_STREAM), nullptr, type.Get());
+			if (FAILED(hr)) {
+				log::warn("audio decoder can't output PCM ({})", HrStr(hr));
+				return false;
+			}
 		}
 
 		ComPtr<IMFMediaType> cur;
@@ -321,6 +339,8 @@ namespace fv
 		auto stream = std::make_unique<AudioStream>();
 		const bool ok = stream->Create(*wfx);
 		_blockAlign = wfx->nBlockAlign;
+		_audioRate = wfx->nSamplesPerSec;
+		_audioChannels = wfx->nChannels;
 		log::info("audio: {} Hz, {} ch, {} bit -> {}", wfx->nSamplesPerSec, wfx->nChannels, wfx->wBitsPerSample, ok ? "ok" : "voice failed");
 		::CoTaskMemFree(wfx);
 
@@ -746,6 +766,35 @@ namespace fv
 			if (flags & MF_SOURCE_READERF_ENDOFSTREAM) {
 				_audioEOS = true;
 				break;
+			}
+			if (flags & MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED) {
+				// the decoder changed its output format while playing: if it no longer matches the voice, the sound
+				// would play at the wrong speed (and the video with it) - make a new voice for the new format
+				ComPtr<IMFMediaType> cur;
+				WAVEFORMATEX*        wfx = nullptr;
+				UINT32               size = 0;
+				if (SUCCEEDED(_audioReader->GetCurrentMediaType(static_cast<DWORD>(MF_SOURCE_READER_FIRST_AUDIO_STREAM), &cur)) &&
+					SUCCEEDED(::MFCreateWaveFormatExFromMFMediaType(cur.Get(), &wfx, &size)) && wfx) {
+					if (wfx->nChannels != _audioChannels) {
+						log::warn("audio: the track changed from {} to {} channels while playing; the sound may be wrong", _audioChannels,
+							wfx->nChannels);
+					} else if (wfx->nSamplesPerSec != _audioRate) {
+						log::info("audio: the track changed from {} Hz to {} Hz while playing; following it", _audioRate, wfx->nSamplesPerSec);
+						for (int i = 0; i < 200 && _audio->Queued() > 0 && !_stop; ++i) {
+							std::this_thread::sleep_for(5ms);  // let the sound in the old rate finish first
+						}
+						// carry the clock over: from here on it counts samples at the new rate
+						const auto now = Clock();
+						if (_audio->SetSampleRate(wfx->nSamplesPerSec)) {
+							_samplesBase = _audio->SamplesPlayed();
+							_clockOffset = now;
+							_audioRate = wfx->nSamplesPerSec;
+						} else {
+							log::warn("audio: couldn't switch the voice to {} Hz", wfx->nSamplesPerSec);
+						}
+					}
+					::CoTaskMemFree(wfx);
+				}
 			}
 			if (!sample) {
 				continue;

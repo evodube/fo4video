@@ -40,6 +40,7 @@ namespace fv
 		std::uint32_t Queued() const;
 		std::uint64_t SamplesPlayed() const;
 		std::uint32_t SampleRate() const { return _sampleRate; }
+		bool          SetSampleRate(std::uint32_t a_rate);  // the decoder switched rate mid-track (no buffers queued)
 
 		void Start();
 		void Pause();

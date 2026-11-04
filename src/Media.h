@@ -101,6 +101,8 @@ namespace fv
 		ComPtr<IMFSourceReader>      _audioReader;
 		std::unique_ptr<AudioStream> _audio;
 		std::uint32_t                _blockAlign{ 0 };
+		std::uint32_t                _audioRate{ 0 };      // the audio format the voice was made for
+		std::uint32_t                _audioChannels{ 0 };
 		std::atomic<bool>            _audioEOS{ false };
 		std::uint64_t                _samplesBase{ 0 };
 
