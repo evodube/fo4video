@@ -40,6 +40,36 @@ namespace fv
 			bool                         tried{ false };
 			bool                         ok{ false };
 		};
+		// a readable name for a Media Foundation codec / format. Matched on the GUID's first field (the wave format tag or
+		// FourCC), so it doesn't need the newest Windows SDK for Opus / FLAC / AV1 and friends.
+		std::string SubtypeName(const GUID& a_sub)
+		{
+			constexpr auto fcc = [](char a, char b, char c, char d) {
+				return static_cast<std::uint32_t>(static_cast<std::uint8_t>(a)) | (static_cast<std::uint32_t>(static_cast<std::uint8_t>(b)) << 8) |
+				       (static_cast<std::uint32_t>(static_cast<std::uint8_t>(c)) << 16) | (static_cast<std::uint32_t>(static_cast<std::uint8_t>(d)) << 24);
+			};
+			struct Name
+			{
+				std::uint32_t id;
+				const char*   name;
+			};
+			static const Name kNames[]{
+				{ 0x1610, "AAC" }, { 0x00FF, "AAC (raw)" }, { 0x0055, "MP3" }, { 0x0050, "MPEG audio" }, { 0x2000, "AC-3" },
+				{ 0xA7FB87AF, "E-AC-3" }, { 0x0001, "PCM" }, { 0x0003, "float PCM" }, { 0x0161, "WMA" }, { 0x0162, "WMA Pro" },
+				{ 0xF1AC, "FLAC" }, { 0x704F, "Opus" }, { 0x6C61, "ALAC" }, { fcc('H', '2', '6', '4'), "H.264" },
+				{ fcc('h', '2', '6', '4'), "H.264" }, { fcc('H', 'E', 'V', 'C'), "HEVC" }, { fcc('V', 'P', '9', '0'), "VP9" },
+				{ fcc('V', 'P', '8', '0'), "VP8" }, { fcc('A', 'V', '0', '1'), "AV1" }, { fcc('M', 'P', '4', 'V'), "MPEG-4 part 2" },
+				{ fcc('X', 'V', 'I', 'D'), "Xvid" }, { fcc('D', 'I', 'V', 'X'), "DivX" }, { fcc('W', 'M', 'V', '3'), "WMV" },
+				{ fcc('W', 'V', 'C', '1'), "VC-1" }, { fcc('M', 'J', 'P', 'G'), "MJPEG" },
+			};
+			for (const auto& n : kNames) {
+				if (a_sub.Data1 == n.id) {
+					return n.name;
+				}
+			}
+			return std::format("{:08X}", a_sub.Data1);  // anything else: its id
+		}
+
 		GpuDecode         g_gpu;
 		std::atomic<bool> g_gpuDisabled{ false };
 
@@ -229,7 +259,23 @@ namespace fv
 		}
 		::PropVariantClear(&var);
 
-		log::info("video: {}x{} stride {} duration {:.1f}s", _width, _height, _stride, _duration / 1.0e7);
+		{
+			// the track as stored in the file: codec and frame rate (for problem reports)
+			double       fps = 0.0;
+			std::string  codec = "?";
+			ComPtr<IMFMediaType> native;
+			if (SUCCEEDED(_videoReader->GetNativeMediaType(static_cast<DWORD>(MF_SOURCE_READER_FIRST_VIDEO_STREAM), 0, &native))) {
+				UINT32 num = 0, den = 0;
+				if (SUCCEEDED(::MFGetAttributeRatio(native.Get(), MF_MT_FRAME_RATE, &num, &den)) && den) {
+					fps = static_cast<double>(num) / den;
+				}
+				GUID sub{};
+				if (SUCCEEDED(native->GetGUID(MF_MT_SUBTYPE, &sub))) {
+					codec = SubtypeName(sub);
+				}
+			}
+			log::info("video: {}x{} stride {} duration {:.1f}s, {} at {:.2f} fps", _width, _height, _stride, _duration / 1.0e7, codec, fps);
+		}
 		return true;
 	}
 
@@ -294,6 +340,21 @@ namespace fv
 		_audioReader->SetStreamSelection(static_cast<DWORD>(MF_SOURCE_READER_ALL_STREAMS), FALSE);
 		if (FAILED(_audioReader->SetStreamSelection(static_cast<DWORD>(MF_SOURCE_READER_FIRST_AUDIO_STREAM), TRUE))) {
 			return false;
+		}
+
+		// the track as stored in the file (for problem reports: HE-AAC / mono / odd rates are what used to play too fast)
+		{
+			ComPtr<IMFMediaType> native;
+			if (SUCCEEDED(_audioReader->GetNativeMediaType(static_cast<DWORD>(MF_SOURCE_READER_FIRST_AUDIO_STREAM), 0, &native))) {
+				GUID   sub{};
+				UINT32 rate = 0, channels = 0, profile = 0;
+				native->GetGUID(MF_MT_SUBTYPE, &sub);
+				native->GetUINT32(MF_MT_AUDIO_SAMPLES_PER_SECOND, &rate);
+				native->GetUINT32(MF_MT_AUDIO_NUM_CHANNELS, &channels);
+				const bool hasProfile = SUCCEEDED(native->GetUINT32(MF_MT_AAC_AUDIO_PROFILE_LEVEL_INDICATION, &profile));
+				log::info("audio track: {}{}, {} Hz, {} ch", SubtypeName(sub), hasProfile ? std::format(" (profile 0x{:02X})", profile) : std::string{},
+					rate, channels);
+			}
 		}
 
 		// Ask for one fixed format: 48 kHz, stereo, 16 bit. The source reader resamples / remixes to it.
@@ -811,6 +872,26 @@ namespace fv
 			}
 			std::vector<std::uint8_t> pcm(data, data + length);
 			buffer->Unlock();
+
+			// once, early on: does the sound arriving match the speed the voice plays at? (bytes per second of track time)
+			if (!_audioChecked && _blockAlign > 0) {
+				LONGLONG duration = 0;
+				if (SUCCEEDED(sample->GetSampleDuration(&duration)) && duration > 0) {
+					_checkFrames += length / _blockAlign;
+					_checkTime += duration;
+					if (_checkTime >= 20'000'000) {  // 2 s of track time
+						_audioChecked = true;
+						const double measured = static_cast<double>(_checkFrames) * 1e7 / static_cast<double>(_checkTime);
+						const double voice = static_cast<double>(_audio->SampleRate());
+						if (voice > 0 && std::abs(measured / voice - 1.0) > 0.05) {
+							log::warn("audio check: the sound arrives at {:.0f} Hz but plays at {:.0f} Hz - it will play {:.2f}x too {}", measured,
+								voice, voice / measured, voice > measured ? "fast" : "slow");
+						} else {
+							log::info("audio check: speed ok ({:.0f} Hz)", measured);
+						}
+					}
+				}
+			}
 
 			_audio->Submit(std::move(pcm));
 		}

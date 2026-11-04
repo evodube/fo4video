@@ -103,6 +103,9 @@ namespace fv
 		std::uint32_t                _blockAlign{ 0 };
 		std::uint32_t                _audioRate{ 0 };      // the audio format the voice was made for
 		std::uint32_t                _audioChannels{ 0 };
+		bool                         _audioChecked{ false };  // the early speed check below ran
+		std::uint64_t                _checkFrames{ 0 };
+		std::int64_t                 _checkTime{ 0 };
 		std::atomic<bool>            _audioEOS{ false };
 		std::uint64_t                _samplesBase{ 0 };
 
