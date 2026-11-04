@@ -1439,24 +1439,44 @@ namespace fv::Remote
 		}
 	}
 
-	void Register()
+	// Safe to call more than once: it runs at several startup points and again on F6, so a missed
+	// F4SE message (or the framework not being ready yet) no longer leaves the remote off all session.
+	void Register(const char* a_when)
 	{
-		if (!F4SEMenuFramework::IsInstalled()) {
-			log::info("F4SE Menu Framework not installed: the remote (F6) is unavailable, hotkeys still work");
+		static bool sectionsAdded = false;
+		if (g_window && sectionsAdded) {
 			return;
 		}
-		F4SEMenuFramework::SetSection("Real Videos");
-		F4SEMenuFramework::AddSectionItem("Now playing", RenderPage);
-		F4SEMenuFramework::AddSectionItem("Settings", RenderSettings);
-		g_window = F4SEMenuFramework::AddWindow(RenderWindow, true);
-		log::info("remote registered with F4SE Menu Framework{}", g_window ? "" : " (window could not be created)");
+		const HMODULE mf = F4SEMenuFramework_GetHostModule();
+		if (!mf) {
+			log::info("remote ({}): F4SE Menu Framework not loaded (F4SEMenuFramework.dll not in the process): the remote (F6) is unavailable, hotkeys still work", a_when);
+			return;
+		}
+		if (!::GetProcAddress(mf, "AddWindow")) {
+			log::warn("remote ({}): F4SE Menu Framework is loaded but has no AddWindow export; the remote can't be shown", a_when);
+			return;
+		}
+		if (!sectionsAdded) {
+			F4SEMenuFramework::SetSection("Real Videos");
+			F4SEMenuFramework::AddSectionItem("Now playing", RenderPage);
+			F4SEMenuFramework::AddSectionItem("Settings", RenderSettings);
+			sectionsAdded = true;
+		}
+		if (!g_window) {
+			g_window = F4SEMenuFramework::AddWindow(RenderWindow, true);
+		}
+		log::info("remote ({}): registered with F4SE Menu Framework{}", a_when, g_window ? "" : " (window could not be created)");
 	}
 
 	void Toggle()
 	{
+		if (!g_window) {
+			Register("remote key");
+		}
 		log::info("remote: remote key pressed (remote {})", !g_window ? "unavailable" : g_window->IsOpen ? "open" : "closed");
 		if (!g_window) {
-			Notify("Real Videos: the remote needs F4SE Menu Framework");
+			Notify(F4SEMenuFramework::IsInstalled() ? "Real Videos: F4SE Menu Framework didn't accept the remote (see RealVideos.log)" :
+			                                          "Real Videos: the remote needs F4SE Menu Framework");
 			return;
 		}
 		if (g_window->IsOpen) {

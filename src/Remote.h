@@ -3,8 +3,9 @@
 namespace fv::Remote
 {
 	// Registers the remote window and the "Now playing" page with F4SE Menu Framework (if it is installed).
-	// Call after all plugins are loaded (kPostPostLoad).
-	void Register();
+	// Call after all plugins are loaded. Safe to call repeatedly (does nothing once registered);
+	// a_when only goes into the log.
+	void Register(const char* a_when);
 
 	// Main thread: open the remote for the screen under the crosshair (or the console pick), or close it.
 	void Toggle();

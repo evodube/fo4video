@@ -16,10 +16,11 @@ namespace
 		}
 		switch (a_msg->type) {
 		case F4SE::MessagingInterface::kPostPostLoad:
-			fv::Remote::Register();
+			fv::Remote::Register("post-post load");
 			break;
 		case F4SE::MessagingInterface::kGameDataReady:
 			fv::log::info("game data ready");
+			fv::Remote::Register("game data ready");  // no-op if already registered
 			fv::Settings::Get().Load();
 			fv::MediaSource::StartupMF();
 			fv::Renderer::Install();
