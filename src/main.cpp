@@ -30,6 +30,13 @@ namespace
 		case F4SE::MessagingInterface::kPostLoadGame:
 		case F4SE::MessagingInterface::kNewGame:
 			fv::Renderer::Install();  // no-op if already hooked
+			{
+				static bool preloaded = false;
+				if (!preloaded) {
+					preloaded = true;
+					fv::Screen::PreloadSlotTextures();
+				}
+			}
 			break;
 		default:
 			break;

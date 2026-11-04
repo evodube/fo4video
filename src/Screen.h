@@ -88,6 +88,7 @@ namespace fv
 	{
 		// Loads (once) the placeholder texture for a slot: Data\Textures\RealVideos\slotNN.dds
 		RE::NiPointer<RE::NiTexture> LoadSlotTexture(int a_slot);
+		void                         PreloadSlotTextures();  // all of them, when a save has loaded
 
 		// True if the texture's renderer data is one of our 4x8 placeholders (safety check before patching it).
 		bool IsPlaceholderTexture(RE::NiTexture* a_tex);

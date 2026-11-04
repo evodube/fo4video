@@ -815,13 +815,17 @@ namespace fv::Screen
 
 		// --- placeholder texture loading ---
 
-		RE::NiTexture* LoadByPathOG(const std::string& a_path)
+		// a_wait: blocking load. Only safe on the game's main thread: the remote's actions run as game tasks on its worker
+		// threads, and a blocking load there waits for texture streaming that may need that very thread - the game froze
+		// on the first Play for some players. Off the main thread the texture object comes back at once and its picture
+		// streams in; nothing touches it until it's there (see IsPlaceholderTexture).
+		RE::NiTexture* LoadByPathOG(const std::string& a_path, bool a_wait)
 		{
 			// F4SE 0.6.23 LoadTextureByPath (used by its Scaleform MountImage). Returns with +1 ref.
 			using func_t = void (*)(const char*, bool, RE::NiTexture*&, std::int32_t, std::uint64_t, std::uint64_t);
 			static REL::Relocation<func_t> func{ REL::Offset(0x027D61F0) };
 			RE::NiTexture* tex = nullptr;
-			func(a_path.c_str(), true, tex, 0, 0, 0);
+			func(a_path.c_str(), a_wait, tex, 0, 0, 0);
 			return tex;
 		}
 
@@ -842,10 +846,12 @@ namespace fv::Screen
 			return out;
 		}
 
+		bool g_preloading = false;  // PreloadSlotTextures is running (main thread, save just loaded): blocking loads are fine
+
 		RE::NiPointer<RE::NiTexture> LoadPlaceholder(const std::string& a_path)
 		{
 			if (REX::FModule::IsRuntimeOG()) {
-				RE::NiTexture* raw = LoadByPathOG(a_path);
+				RE::NiTexture* raw = LoadByPathOG(a_path, g_preloading);
 				if (!raw) {
 					return {};
 				}
@@ -977,6 +983,21 @@ namespace fv::Screen
 		return std::format("'{}' [{:08X}]", name && *name ? name : "", a_ref->GetFormID());
 	}
 
+	// every placeholder, when a save loads (main thread; the game is loading textures then anyway), so pressing Play
+	// never has to load one from a game task
+	void PreloadSlotTextures()
+	{
+		int ready = 0, loading = 0;
+		g_preloading = true;
+		for (int i = 0; i < static_cast<int>(g_slotTextures.size()); ++i) {
+			if (auto tex = LoadSlotTexture(i)) {
+				(tex->rendererTexture ? ready : loading) += 1;
+			}
+		}
+		g_preloading = false;
+		log::info("placeholder textures: {} ready, {} still loading", ready, loading);
+	}
+
 	RE::NiPointer<RE::NiTexture> LoadSlotTexture(int a_slot)
 	{
 		if (a_slot < 0 || a_slot >= static_cast<int>(g_slotTextures.size())) {
@@ -1017,7 +1038,7 @@ namespace fv::Screen
 		}
 
 		if (fallback) {
-			log::warn("slot {}: placeholder not resident yet, will verify before use", a_slot);
+			log::info("slot {}: placeholder still loading, will verify before use", a_slot);
 			g_slotTextures[a_slot] = fallback;
 			return fallback;
 		}

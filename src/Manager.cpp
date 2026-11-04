@@ -584,6 +584,7 @@ namespace fv
 			return false;
 		}
 
+		log::info("start: {} - finding a free slot", refName);
 		int slot = -1;
 		{
 			std::scoped_lock lock(_lock);
@@ -607,6 +608,7 @@ namespace fv
 			_slots[slot].inUse = false;
 		};
 
+		log::info("start: slot {} - placeholder textures", slot);
 		auto slotTexture = Screen::LoadSlotTexture(slot);
 		auto glowTexture = Screen::LoadSlotTexture(slot + kMaxSlots);  // glow map (optional; missing = glowing shader)
 		if (!slotTexture) {
@@ -631,6 +633,7 @@ namespace fv
 			return false;
 		}
 
+		log::info("start: putting the video on the screen's mesh");
 		if (!Screen::Bind(a_ref, slotTexture.get(), player->binding, -1, glowTexture.get())) {
 			Notify(std::format("Real Videos: no screen found on {} (see RealVideos.log)", refName));
 			releaseSlot();
@@ -1323,6 +1326,7 @@ namespace fv
 		if (!Settings::Get().onlySupportedScreens) {
 			return false;
 		}
+		log::info("start: checking it's a TV, projector or cinema screen");
 		std::string what;
 		if (Screen::IsSupported(a_ref, &what)) {
 			return false;
