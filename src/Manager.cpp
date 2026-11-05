@@ -877,6 +877,18 @@ namespace fv
 		}
 	}
 
+	void Manager::SetLoopAll(bool a_loop)
+	{
+		std::scoped_lock lock(_lock);
+		for (auto& p : _players) {
+			p->loop = a_loop;
+		}
+		for (auto& s : _sleepers) {
+			s.loop = a_loop;
+		}
+		log::info("loop {} for the screens playing now", a_loop ? "on" : "off");
+	}
+
 	bool Manager::IsPlaying(RE::TESObjectREFR* a_ref)
 	{
 		if (!a_ref) {
@@ -2092,8 +2104,9 @@ namespace fv
 				p.media->SetVolume(p.volume);
 				p.media->SetPan(p.pan.load());
 				if (!held && !frozen && p.media->Finished()) {
-					if (settings.shuffle && p.kind == SourceKind::kVideo) {
-						// shuffle: another random video from the same folder
+					// a video that ended moves on to the next one in its folder (shuffle: a random one) unless it loops;
+					// with shuffle on it always moves on
+					if (p.kind == SourceKind::kVideo && (settings.shuffle || !p.loop)) {
 						if (!p.advancePending) {
 							p.advancePending = true;
 							if (auto* tasks = F4SE::GetTaskInterface()) {

@@ -90,7 +90,7 @@ namespace fv
 		bool               unseen{ false };  // far or out of view (freeze timer running)
 		std::chrono::steady_clock::time_point unseenSince{};
 		std::atomic<bool>  frozen{ false };
-		bool               advancePending{ false };  // shuffle: the next random video was asked for at the end  // picture not updated (sound carries on)
+		bool               advancePending{ false };  // the video ended and the next one was asked for (shuffle or loop off)
 		bool               wasFrozen{ false };  // render thread
 		// GPU decoding: the decoder's shared textures opened on the game's device (render thread)
 		struct GpuIn
@@ -160,6 +160,8 @@ namespace fv
 		bool PlayTestPattern(RE::TESObjectREFR* a_ref);
 		void Stop(RE::TESObjectREFR* a_ref);
 		void StopAll();
+		// Main thread: the Loop setting was changed; screens playing now (and ones asleep) follow it right away.
+		void SetLoopAll(bool a_loop);
 		bool IsPlaying(RE::TESObjectREFR* a_ref);
 		void SetVolume(RE::TESObjectREFR* a_ref, float a_volume);
 		void Maintain();
