@@ -13,6 +13,11 @@ namespace fv::Renderer
 		ComPtr<ID3D11DeviceContext> g_context;
 		IDXGISwapChain*             g_swapChain{ nullptr };
 		bool                        g_installed{ false };
+		// Set when the swap chain isn't a D3D11 one (upscalers with frame generation present through D3D12): then our
+		// drawing only runs on this thread, the game's own, never on a frame generator's present thread, because the
+		// game's D3D11 immediate context must not be used from two threads at once. 0 = no restriction (normal case).
+		std::atomic<DWORD>          g_drawThread{ 0 };
+		std::atomic<bool>           g_otherThreadLogged{ false };
 
 		// a_ptr really is a D3D11 device (or context)? Guards against reading the game's renderer data at the wrong spot
 		// on a game version we haven't seen: a bad pointer is caught instead of crashing.
@@ -68,9 +73,36 @@ namespace fv::Renderer
 		HRESULT STDMETHODCALLTYPE HookedPresent(IDXGISwapChain* a_swapChain, UINT a_syncInterval, UINT a_flags)
 		{
 			if (a_swapChain == g_swapChain && g_device && g_context) {
-				Manager::Get().OnPresent(g_device.Get(), g_context.Get());
+				const DWORD only = g_drawThread.load(std::memory_order_relaxed);
+				const DWORD self = ::GetCurrentThreadId();
+				if (only == 0 || only == self) {
+					Manager::Get().OnPresent(g_device.Get(), g_context.Get());
+				} else if (!g_otherThreadLogged.exchange(true)) {
+					log::warn("renderer: a frame was presented from thread {} (the game's is {}); frame generation? videos are only drawn on the game's own frames",
+						self, only);
+				}
 			}
 			return g_originalPresent(a_swapChain, a_syncInterval, a_flags);
+		}
+
+		// IDXGISwapChain::Present is slot 8 for D3D11 and D3D12 swap chains alike
+		bool HookPresent(IDXGISwapChain* a_swapChain)
+		{
+			auto**        vtable = *reinterpret_cast<void***>(a_swapChain);
+			DWORD         oldProtect = 0;
+			constexpr int kPresent = 8;
+			if (!::VirtualProtect(&vtable[kPresent], sizeof(void*), PAGE_EXECUTE_READWRITE, &oldProtect)) {
+				log::error("VirtualProtect failed");
+				return false;
+			}
+			g_originalPresent = reinterpret_cast<Present_t>(vtable[kPresent]);
+			vtable[kPresent] = reinterpret_cast<void*>(&HookedPresent);
+			::VirtualProtect(&vtable[kPresent], sizeof(void*), oldProtect, &oldProtect);
+
+			g_swapChain = a_swapChain;
+			g_installed = true;
+			log::info("Present hook installed");
+			return true;
 		}
 	}
 
@@ -91,10 +123,36 @@ namespace fv::Renderer
 			return false;
 		}
 
+		ComPtr<ID3D11Device>        gameDevice;
+		ComPtr<ID3D11DeviceContext> gameContext;
+		const bool                  haveGame = QueryDevice(data->device, gameDevice.GetAddressOf()) &&
+		                      QueryContext(data->context, gameContext.GetAddressOf());
+
 		ComPtr<ID3D11Device> chainDevice;
 		if (FAILED(swapChain->GetDevice(__uuidof(ID3D11Device), reinterpret_cast<void**>(chainDevice.GetAddressOf())))) {
-			log::error("swap chain has no D3D11 device");
-			return false;
+			// Upscaling / frame generation mods (DLSS-G, FSR 3 frame generation) replace the game's swap chain with a
+			// D3D12 one, which has no D3D11 device. The game still draws with its own D3D11 device, and that's the one
+			// our textures must come from anyway, so use it.
+			ComPtr<ID3D11Device> contextDevice;
+			if (haveGame) {
+				gameContext->GetDevice(contextDevice.GetAddressOf());
+			}
+			if (!haveGame || contextDevice.Get() != gameDevice.Get()) {
+				log::error("swap chain has no D3D11 device, and the game's own device couldn't be read; videos can't be shown");
+				return false;
+			}
+			const auto* gameMain = RE::Main::GetSingleton();
+			const DWORD gameThread = gameMain && gameMain->threadID ? gameMain->threadID : ::GetCurrentThreadId();
+			g_drawThread = gameThread;
+			g_device = gameDevice;
+			g_context = gameContext;
+			MediaSource::SetGameDevice(g_device.Get());
+			log::warn("renderer: the swap chain isn't D3D11 (upscaler / frame generation?); using the game's own device, drawing on the game's thread {}",
+				gameThread);
+			log::info("renderer: swapChain={} device={} context={}", static_cast<void*>(swapChain), static_cast<void*>(g_device.Get()),
+				static_cast<void*>(g_context.Get()));
+			LogGraphicsMods();
+			return HookPresent(swapChain);
 		}
 		ComPtr<ID3D11DeviceContext> chainContext;
 		chainDevice->GetImmediateContext(chainContext.GetAddressOf());
@@ -104,10 +162,6 @@ namespace fv::Renderer
 		// wrappers they can differ, and textures from one device used by the other can break or hang the graphics driver.
 		g_device = chainDevice;
 		g_context = chainContext;
-		ComPtr<ID3D11Device>        gameDevice;
-		ComPtr<ID3D11DeviceContext> gameContext;
-		const bool                  haveGame = QueryDevice(data->device, gameDevice.GetAddressOf()) &&
-		                      QueryContext(data->context, gameContext.GetAddressOf());
 		if (haveGame && gameDevice.Get() != chainDevice.Get()) {
 			ComPtr<ID3D11Device> contextDevice;
 			gameContext->GetDevice(contextDevice.GetAddressOf());
@@ -131,21 +185,6 @@ namespace fv::Renderer
 			static_cast<void*>(g_device.Get()), static_cast<void*>(chainDevice.Get()), static_cast<void*>(data->device),
 			static_cast<void*>(g_context.Get()));
 		LogGraphicsMods();
-
-		auto**      vtable = *reinterpret_cast<void***>(swapChain);
-		DWORD       oldProtect = 0;
-		constexpr int kPresent = 8;
-		if (!::VirtualProtect(&vtable[kPresent], sizeof(void*), PAGE_EXECUTE_READWRITE, &oldProtect)) {
-			log::error("VirtualProtect failed");
-			return false;
-		}
-		g_originalPresent = reinterpret_cast<Present_t>(vtable[kPresent]);
-		vtable[kPresent] = reinterpret_cast<void*>(&HookedPresent);
-		::VirtualProtect(&vtable[kPresent], sizeof(void*), oldProtect, &oldProtect);
-
-		g_swapChain = swapChain;
-		g_installed = true;
-		log::info("Present hook installed");
-		return true;
+		return HookPresent(swapChain);
 	}
 }
