@@ -146,11 +146,31 @@ namespace fv::Screen
 		std::string ModelKey(RE::TESObjectREFR* a_ref);
 		int         Score(const Candidate& a_c);
 
+		// Videos of the Wasteland's Radiation Queen (all editions: plain, Clean, Vault-Tec, Nuka Cola) is a media player
+		// that drives a TV next to it; it isn't a screen. Its glowing holotape uses a VotW material, which made it look
+		// like a video surface. Matched by its mesh (VotWR\RadiationQueen.nif / RadiationQueenClean.nif), so the Radiation
+		// Star and Ceiling Projector, which have the same holotape mesh, still work.
+		bool IsMediaPlayer(RE::TESObjectREFR* a_ref)
+		{
+			auto* base = a_ref ? a_ref->GetObjectReference() : nullptr;
+			auto* model = base ? base->As<RE::TESModel>() : nullptr;
+			const char* path = model ? model->GetModel() : nullptr;
+			if (!path) {
+				return false;
+			}
+			auto lower = Lower(path);
+			std::ranges::replace(lower, '/', '\\');
+			if (lower.starts_with("meshes\\")) {
+				lower.erase(0, 7);
+			}
+			return lower.starts_with("votwr\\radiationqueen");
+		}
+
 		void CollectRef(RE::TESObjectREFR* a_ref, bool a_nearby, std::vector<Candidate>& a_out)
 		{
 			auto* root = a_ref ? a_ref->Get3D() : nullptr;
-			if (!root) {
-				return;
+			if (!root || IsMediaPlayer(a_ref)) {
+				return;  // a media player never shows a video, neither when picked nor as a screen next to something else
 			}
 			const auto first = a_out.size();
 			Collect(root, {}, a_out);
@@ -889,6 +909,10 @@ namespace fv::Screen
 			set("not loaded");
 			return false;
 		}
+		if (IsMediaPlayer(a_ref)) {
+			set("Videos of the Wasteland media player (Radiation Queen) - aim at the TV instead");
+			return false;
+		}
 		const auto rootName = Lower(Str(root->name));
 		const auto key = Lower(ModelKey(a_ref));
 		std::vector<Candidate> meshes;
@@ -1495,6 +1519,11 @@ namespace fv::Screen
 		}
 		auto* root = a_ref->Get3D();
 		if (!root) {
+			return false;
+		}
+		if (IsMediaPlayer(a_ref)) {
+			// also covers videos saved on one before this was added, and Papyrus calls
+			log::info("{}: a media player (Radiation Queen), not a screen; nothing played on it", RefName(a_ref));
 			return false;
 		}
 
