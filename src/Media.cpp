@@ -274,6 +274,7 @@ namespace fv
 					codec = SubtypeName(sub);
 				}
 			}
+			_frameDuration = fps >= 1.0 && fps <= 240.0 ? static_cast<std::int64_t>(1.0e7 / fps) : 333'667;  // unknown: 29.97
 			log::info("video: {}x{} stride {} duration {:.1f}s, {} at {:.2f} fps", _width, _height, _stride, _duration / 1.0e7, codec, fps);
 		}
 		return true;
@@ -606,6 +607,48 @@ namespace fv
 	{
 		ComScope com;
 
+		// Frame times as the decoder gives them can be broken (some MKV files through Windows' MKV reader: the frames
+		// after a keyframe come out stamped far ahead of where they belong). The picture is shown when the sound's clock
+		// reaches a frame's time, so such a frame - and everything queued behind it - would never come, and the picture
+		// sticks on the first frame after every start or jump while the sound plays on. A time that's far from the
+		// previous frame's plus one frame is taken as the previous frame's plus one frame instead. Small differences
+		// (frame reordering, a slightly uneven frame rate) are left alone.
+		std::int64_t                lastPts = -1;
+		std::vector<std::int64_t>   firstTimes;
+		auto fixTime = [&](std::int64_t a_ts, IMFSample* a_sample) {
+			LONGLONG dur = 0;
+			const std::int64_t step = a_sample && SUCCEEDED(a_sample->GetSampleDuration(&dur)) && dur > 0 && dur < 10'000'000 ? dur : _frameDuration;
+			if (!_timesLogged && firstTimes.size() < 8) {
+				firstTimes.push_back(a_ts);
+				if (firstTimes.size() == 8) {
+					_timesLogged = true;
+					std::string list;
+					for (const auto t : firstTimes) {
+						list += std::format("{}{:.3f}", list.empty() ? "" : " ", t / 1.0e7);
+					}
+					log::info("video: first frame times {} s (one frame {:.3f} s)", list, step / 1.0e7);
+				}
+			}
+			if (lastPts < 0) {
+				lastPts = a_ts;  // the first frame after a start or jump: trust it
+				return a_ts;
+			}
+			const std::int64_t expected = lastPts + step;
+			constexpr std::int64_t kTolerance = 10'000'000;  // 1 s
+			std::int64_t           ts = a_ts;
+			if (a_ts > expected + kTolerance || a_ts < lastPts - kTolerance) {
+				if (!_fixLogged) {
+					_fixLogged = true;
+					log::warn("video: the file's frame times are broken (a frame stamped {:.3f} s, after one at {:.3f} s); timing the "
+							  "picture by the frame rate instead",
+						a_ts / 1.0e7, lastPts / 1.0e7);
+				}
+				ts = expected;
+			}
+			lastPts = std::max(lastPts, ts);
+			return ts;
+		};
+
 		while (!_stop) {
 			{
 				std::unique_lock lock(_frameLock);
@@ -625,6 +668,7 @@ namespace fv
 					var.hVal.QuadPart = jump;
 					_videoReader->SetCurrentPosition(GUID_NULL, var);
 					_videoEOS = false;
+					lastPts = -1;  // trust the first frame after the jump again
 				}
 				if (_frames.size() >= kMaxFrames) {
 					continue;
@@ -650,6 +694,7 @@ namespace fv
 			if (!sample) {
 				continue;
 			}
+			timestamp = fixTime(timestamp, sample.Get());
 
 			std::uint32_t w, h, frameH, cropX, cropY;
 			LONG          defaultStride;

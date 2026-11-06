@@ -89,6 +89,9 @@ namespace fv
 		std::uint32_t           _cropX{ 0 };        // visible picture inside it
 		std::uint32_t           _cropY{ 0 };
 		std::int64_t            _duration{ 0 };
+		std::int64_t            _frameDuration{ 0 };   // one frame of the video track (100 ns), from its frame rate
+		bool                    _timesLogged{ false };  // the first frame times were written to the log
+		bool                    _fixLogged{ false };    // a frame time correction was written to the log
 
 		mutable std::mutex      _frameLock;
 		std::condition_variable _frameCv;
