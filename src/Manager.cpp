@@ -1075,7 +1075,7 @@ namespace fv
 				const auto key = PrefKey(*p);
 				const auto it = _prefs.find(key);
 				p->brightness = it != _prefs.end() ? it->second.brightness : 1.0f;
-				p->brightenable = p->binding.bound;  // TVs too (they go through the same filter as projectors)
+				p->brightenable = p->binding.bound && !p->binding.classic;  // TVs: no brightness control (removed on request)
 			}
 
 			// far away or out of view for a while: stop updating the picture (the sound carries on). Comes back
