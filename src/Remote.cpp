@@ -1202,6 +1202,9 @@ namespace fv::Remote
 			dirty |= Checkbox("Two-sided screens: show on both sides", &s.bothSides);
 			dirty |= Checkbox("Stop the screen's own animation while playing", &s.stopScreenAnimation);
 			dirty |= Checkbox("Hide glowing layers over the screen", &s.hideOverlays);
+			dirty |= Checkbox("TVs: hide the TV's static, glass and colour tint", &s.tvClean);
+			Tip("The video shows clean on TVs, without the vanilla TV filter over it. Use the TVs' old film look below for "
+				"an old look instead. Applies when a video starts (or press Apply below).");
 			// old cinema film look, every part on its own slider; the cinema and projectors each have their own set
 			const auto filmSliders = [&](const char* a_id, Settings::Film& a_f) {
 				PushID(a_id);
@@ -1218,7 +1221,9 @@ namespace fv::Remote
 			filmSliders("cinemafilm", s.cinemaFilm);
 			SeparatorText("Projectors: old film look");
 			filmSliders("projectorfilm", s.projectorFilm);
-			TextDisabled("All at 0% = no film look. TVs never get it. Changes show right away.");
+			SeparatorText("TVs: old film look");
+			filmSliders("tvfilm", s.tvFilm);
+			TextDisabled("All at 0% = no film look. Changes show right away.");
 			Separator();
 
 			Text("Colours");

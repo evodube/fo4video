@@ -134,6 +134,8 @@ namespace fv
 		};
 		putFilm(L"CinemaFilm", cinemaFilm);
 		putFilm(L"ProjectorFilm", projectorFilm);
+		putFilm(L"TVFilm", tvFilm);
+		put(L"Screen", L"bCleanTVScreens", b(tvClean));
 		put(L"Screen", L"fBigScreenBrightness", f(bigScreenBrightness));
 		put(L"Screen", L"bOnlyInsideScreenArea", b(composite));
 		put(L"Screen", L"bShowOnBothSides", b(bothSides));
@@ -234,6 +236,8 @@ namespace fv
 		};
 		readFilm(L"CinemaFilm", cinemaFilm);
 		readFilm(L"ProjectorFilm", projectorFilm);
+		readFilm(L"TVFilm", tvFilm);
+		tvClean = ReadBool(L"Screen", L"bCleanTVScreens", tvClean);
 		selfLit = ReadBool(L"Screen", L"bSelfLitScreens", selfLit);
 		selfLitLatePass = ReadBool(L"Screen", L"bSelfLitLatePass", selfLitLatePass);
 		glowMap = ReadBool(L"Screen", L"bFrameLitByWorld", glowMap);

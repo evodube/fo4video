@@ -1075,7 +1075,7 @@ namespace fv
 				const auto key = PrefKey(*p);
 				const auto it = _prefs.find(key);
 				p->brightness = it != _prefs.end() ? it->second.brightness : 1.0f;
-				p->brightenable = p->binding.bound && !p->binding.classic;
+				p->brightenable = p->binding.bound;  // TVs too (they go through the same filter as projectors)
 			}
 
 			// far away or out of view for a while: stop updating the picture (the sound carries on). Comes back
@@ -2221,8 +2221,11 @@ namespace fv
 			}
 			const float pictureBright = (b.bigScreen ? settings.bigScreenBrightness : 1.0f) * screenBright;
 			const float pictureFx[4]{ pictureBright, 0.0f, static_cast<float>(std::fmod(seconds, 3600.0)), 0.0f };
-			// old film look: the cinema's own, projectors their own, TVs none
-			const Settings::Film* filmSet = b.bound && !b.classic ? (b.bigScreen ? &settings.cinemaFilm : &settings.projectorFilm) : nullptr;
+			// old film look: the cinema, projectors and TVs each have their own
+			const Settings::Film* filmSet = !b.bound ? nullptr :
+			                                b.classic ? &settings.tvFilm :
+			                                b.bigScreen ? &settings.cinemaFilm :
+			                                              &settings.projectorFilm;
 			float                 film[8]{};
 			const bool            filmOn = filmSet && filmSet->Any();
 			if (filmOn) {
@@ -2295,7 +2298,7 @@ namespace fv
 
 			// 3) big screens (the drive-in): brighter, with the VHS tape look, redrawn every frame (the tape noise moves)
 			//    and lit projector screens given their own brightness from the remote
-			const bool filtered = !composite && b.bound && !b.classic && (pictureBright != 1.0f || filmOn) && Compositor::Get().Ready(a_device);
+			const bool filtered = !composite && b.bound && (pictureBright != 1.0f || filmOn) && Compositor::Get().Ready(a_device);
 			if (filtered && p.frozen.load() && slot.compSRV) {
 				want = slot.compSRV.Get();  // frozen: keep the last filtered picture, nothing redrawn
 			} else if (filtered && slot.srv && slot.width && slot.height && slot.EnsureComposite(a_device, slot.width, slot.height, srgb)) {

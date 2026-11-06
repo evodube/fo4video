@@ -1193,6 +1193,36 @@ namespace fv::Screen
 			a_obj->SetAppCulled(true);
 		}
 
+		// hide the glowing (effect shader) layers drawn over a_geom: a TV's static / glass, the drive-in movie's stills
+		// a_tvLayers: also a TV's glass / static layers whatever their shader (the glass is often a reflective lit layer)
+		void HideLayersOver(ScreenBinding& a_binding, RE::BSGeometry* a_geom, RE::NiAVObject* a_root, bool a_tvLayers = false)
+		{
+			if (!a_geom || !a_root) {
+				return;
+			}
+			std::vector<Candidate> layers;
+			Collect(a_root, {}, layers);
+			const auto& mine = a_geom->worldBound;
+			for (auto& c : layers) {
+				auto* other = c.geom;
+				auto* otherProp = GetShaderProperty(other);
+				if (other == a_geom || other->GetAppCulled() || !otherProp || !otherProp->material) {
+					continue;
+				}
+				const auto nameLower = Lower(c.name);
+				const bool tvLayer = a_tvLayers && (ContainsAny(nameLower, { "glass", "noise", "static" }) ||
+				                                       ContainsAny(Lower(BaseTextureName(otherProp)), { "noise", "static" }));
+				if (!tvLayer && otherProp->material->GetType() != RE::BSShaderMaterial::Type::kEffect) {
+					continue;
+				}
+				const auto& theirs = other->worldBound;
+				const float reach = std::max(mine.fRadius, theirs.fRadius) * 1.2f;
+				if (mine.center.GetDistance(theirs.center) <= reach) {
+					HideLayer(a_binding, other);
+				}
+			}
+		}
+
 	}
 
 	namespace
@@ -1726,6 +1756,14 @@ namespace fv::Screen
 				mat->texCoordScale[i] = a_binding.uvScale;
 			}
 			a_binding.screenAspect = 0.0f;  // stretch to fill, no black bars
+			// the vanilla TV filter: its palette tint and the static / glass layers drawn over the picture
+			if (settings.tvClean) {
+				a_binding.originalFlags = prop->flags.underlying();
+				prop->SetFlag(RE::BSShaderProperty::EShaderPropertyFlag::kGrayscaleToPaletteColor, false);
+				prop->SetFlag(RE::BSShaderProperty::EShaderPropertyFlag::kGrayscaleToPaletteAlpha, false);
+				a_binding.flagsChanged = true;
+				HideLayersOver(a_binding, geom, candidates[index].root, true);
+			}
 		} else {
 			// stop UV/flipbook animation controllers (Videos of the Wasteland scrolls its screens this way)
 			if (settings.stopScreenAnimation && prop->controllers) {
@@ -1848,22 +1886,7 @@ namespace fv::Screen
 			// glowing layers drawn over the same spot (a TV's noise/glass overlays, the stills and credits of the
 			// drive-in movie) would cover the video: hide them while we play
 			if (a_binding.isEffect && settings.hideOverlays) {
-				std::vector<Candidate> layers;
-				Collect(candidates[index].root, {}, layers);
-				const auto& mine = geom->worldBound;
-				for (auto& c : layers) {
-					auto* other = c.geom;
-					auto* otherProp = GetShaderProperty(other);
-					if (other == geom || other->GetAppCulled() || !otherProp || !otherProp->material ||
-						otherProp->material->GetType() != RE::BSShaderMaterial::Type::kEffect) {
-						continue;
-					}
-					const auto& theirs = other->worldBound;
-					const float reach = std::max(mine.fRadius, theirs.fRadius) * 1.2f;
-					if (mine.center.GetDistance(theirs.center) <= reach) {
-						HideLayer(a_binding, other);
-					}
-				}
+				HideLayersOver(a_binding, geom, candidates[index].root);
 			}
 
 			// the back of a two-sided sheet shows the same texture: stop drawing it so only the front has video

@@ -55,6 +55,7 @@ namespace fv
 		bool                     bothSides{ false };
 		bool                     hideOverlays{ true };       // hide glowing layers / film stills drawn over the screen while playing
 		bool                     classicTV{ true };
+		bool                     tvClean{ true };  // TVs: hide the TV's static / glass layers and drop its palette tint while playing
 		bool                     onlySupportedScreens{ true };
 		bool                     aimToSelect{ true };     // hotkeys and the remote use the screen under the crosshair
 		float                    aimDistance{ 14000.0f };  // ~200 m
@@ -97,6 +98,7 @@ namespace fv
 		bool  projectorStretch{ false };   // projectors: stretch the video to fill the screen (no black bars)
 		Film  cinemaFilm{ 0.25f, 0.25f, 0.2f, 0.35f, 0.3f, 0.15f, 0.2f };
 		Film  projectorFilm{};
+		Film  tvFilm{};  // TVs' own old film look (all 0 = off)
 		float bigScreenBrightness{ 1.15f };  // big screens (the drive-in): picture brightness
 		bool  selfLit{ true };               // projector & cinema screens glow like TVs (same brightness day/night, any direction)
 		bool  selfLitLatePass{ true };
