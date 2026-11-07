@@ -124,6 +124,12 @@ namespace fv
 		std::uint32_t             _srcChannels{ 0 };        // channels the decoder delivers (downmixed to the voice's if different)
 		std::chrono::steady_clock::time_point _waitSince{}; // the next picture has been waiting far ahead of the sound since
 		bool                      _catchUpLogged{ false };
+		std::atomic<std::uint64_t> _decoded{ 0 };  // frames the decoder delivered (for the log)
+		std::atomic<std::uint64_t> _late{ 0 };     // frames skipped because the decoder was too slow for them
+		std::chrono::steady_clock::time_point _openedAt{ std::chrono::steady_clock::now() };
+	public:
+		std::string Stats() const;  // "decoded 120 frames in 5.0 s (24.0 a second), 3 too late"
+	private:
 
 		// threads
 		std::atomic<bool> _stop{ false };

@@ -2050,12 +2050,13 @@ namespace fv
 			if (p.stopping) {
 				slot.Unpatch();
 				_glowSlots[p.slot].Unpatch();
+				const std::string stats = p.media ? "; " + p.media->Stats() : std::string{};
 				if (p.media) {
 					// tear down decoder threads / audio voice off the render thread
 					std::thread([media = std::move(p.media)]() mutable { media.reset(); }).detach();
 				}
 				slot.inUse = false;
-				log::info("stopped {} (slot {}, {} frames shown)", p.name, p.slot, p.framesShown);
+				log::info("stopped {} (slot {}, {} frames shown{})", p.name, p.slot, p.framesShown, stats);
 				it = _players.erase(it);
 				continue;
 			}

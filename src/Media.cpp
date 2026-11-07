@@ -606,6 +606,7 @@ namespace fv
 			while (!_frames.empty() && _frames.front().pts <= a_clock) {
 				if (got) {
 					_pool.push_back(std::move(a_out));  // late frame we are skipping
+					++_late;
 				}
 				a_out = std::move(_frames.front());
 				_frames.pop_front();
@@ -645,6 +646,14 @@ namespace fv
 		}
 	}
 
+	std::string MediaSource::Stats() const
+	{
+		const double secs = std::chrono::duration<double>(steady_t::now() - _openedAt).count();
+		const auto   decoded = _decoded.load();
+		return std::format("decoded {} frames in {:.1f} s ({:.1f} a second, the video has {:.1f}), {} too late to show", decoded, secs,
+			secs > 0 ? decoded / secs : 0.0, _frameDuration > 0 ? 1.0e7 / static_cast<double>(_frameDuration) : 0.0, _late.load());
+	}
+
 	bool MediaSource::Finished() const
 	{
 		bool framesLeft;
@@ -664,6 +673,8 @@ namespace fv
 	void MediaSource::VideoThread()
 	{
 		ComScope com;
+		// the game keeps all cores busy; without this, decoding can fall far behind on some PCs (a few frames a second)
+		::SetThreadPriority(::GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
 
 		// Frame times as the decoder gives them can be broken (some MKV files through Windows' MKV reader: the frames
 		// after a keyframe come out stamped far ahead of where they belong). The picture is shown when the sound's clock
@@ -782,6 +793,7 @@ namespace fv
 				}
 				frame.pts = timestamp;
 				if (GpuFrame(gpuBuffer.Get(), frame, w, h, cropX, cropY)) {
+					++_decoded;
 					std::scoped_lock lock(_frameLock);
 					_frames.push_back(std::move(frame));
 				} else {
@@ -841,6 +853,7 @@ namespace fv
 				buffer->Unlock();
 			}
 
+			++_decoded;
 			std::scoped_lock lock(_frameLock);
 			_frames.push_back(std::move(frame));
 		}
@@ -886,8 +899,13 @@ namespace fv
 			desc.Usage = D3D11_USAGE_DEFAULT;
 			desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
 			desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
-			if (FAILED(g_gpu.device->CreateTexture2D(&desc, nullptr, &a_frame.gpuTexture))) {
-				return fail(std::format("couldn't make a {}x{} shared texture", a_w, a_h).c_str());
+			HRESULT texHr = g_gpu.device->CreateTexture2D(&desc, nullptr, &a_frame.gpuTexture);
+			if (FAILED(texHr)) {
+				desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;  // some drivers won't share a typeless texture
+				const HRESULT again = g_gpu.device->CreateTexture2D(&desc, nullptr, &a_frame.gpuTexture);
+				if (FAILED(again)) {
+					return fail(std::format("couldn't make a {}x{} shared texture: {} / {}", a_w, a_h, HrStr(texHr), HrStr(again)).c_str());
+				}
 			}
 			ComPtr<IDXGIResource> res;
 			if (FAILED(a_frame.gpuTexture.As(&res)) || FAILED(res->GetSharedHandle(&a_frame.gpuShared))) {
@@ -985,7 +1003,15 @@ namespace fv
 			// the first sound after a start or jump: the clock starts where the sound really is. A jump can land a few
 			// seconds from where it was asked (MKV / AVI files seek to the nearest index point); counting from the asked
 			// spot left the sound and the picture apart, and the picture waited on one frame.
-			if (_anchorPending.exchange(false)) {
+			if (_anchorPending) {
+				// a jump landed before the asked spot: skip the sound up to it, so the sound starts where it was asked and
+				// the picture (whose earlier frames are skipped too) can play right away instead of waiting
+				LONGLONG dur = 0;
+				sample->GetSampleDuration(&dur);
+				if (timestamp + dur < _askedPos && _askedPos - timestamp < 600'000'000) {  // within 60 s
+					continue;
+				}
+				_anchorPending = false;
 				if (std::abs(timestamp - _askedPos) > 2'500'000) {
 					log::info("audio: the sound starts at {:.2f} s (asked for {:.2f} s); the clock follows the sound", timestamp / 1.0e7,
 						_askedPos / 1.0e7);
