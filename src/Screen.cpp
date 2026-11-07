@@ -1345,6 +1345,14 @@ namespace fv::Screen
 			reinterpret_cast<copy_t>(litVtbl[2])(glowMat, a_mat);
 			GlowTexture(glowMat) = RE::NiPointer<RE::NiTexture>(a_glowTexture);
 			glowMat->IncRef();
+			// No shine on the picture: the screen's material can be glossy, and lights (even ones out of sight, or the
+			// moon) then put a bright white spot on the video that moves as you walk around. Only our copy is changed,
+			// so the screen looks as before once the video stops.
+			{
+				auto* base = static_cast<RE::BSLightingShaderMaterialBase*>(glowMat);
+				base->specularColor = RE::NiColor{ 0.0f, 0.0f, 0.0f };
+				base->specularColorScale = 0.0f;
+			}
 
 			auto* lit = static_cast<RE::BSLightingShaderProperty*>(a_prop);
 			static RE::NiColor white{ 1.0f, 1.0f, 1.0f };
