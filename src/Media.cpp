@@ -142,7 +142,20 @@ namespace fv
 				return false;
 			}
 			g_gpu.ok = true;
-			log::info("GPU decoding ready");
+			{
+				// which graphics card (a game running on the CPU's built-in graphics instead of the card is a common cause
+				// of slow or missing video)
+				DXGI_ADAPTER_DESC ad{};
+				std::string       name = "?";
+				if (SUCCEEDED(g_gpu.adapter->GetDesc(&ad))) {
+					const int len = ::WideCharToMultiByte(CP_UTF8, 0, ad.Description, -1, nullptr, 0, nullptr, nullptr);
+					if (len > 1) {
+						name.assign(static_cast<std::size_t>(len - 1), '\0');
+						::WideCharToMultiByte(CP_UTF8, 0, ad.Description, -1, name.data(), len, nullptr, nullptr);
+					}
+				}
+				log::info("GPU decoding ready on {} ({} MB video memory)", name, ad.DedicatedVideoMemory / (1024 * 1024));
+			}
 			return true;
 		}
 	}
