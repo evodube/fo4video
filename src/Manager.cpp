@@ -2136,7 +2136,11 @@ namespace fv
 						sd.Format = srgb ? DXGI_FORMAT_B8G8R8A8_UNORM_SRGB : DXGI_FORMAT_B8G8R8A8_UNORM;
 						sd.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
 						sd.Texture2D.MipLevels = 1;
-						a_device->CreateShaderResourceView(in.texture.Get(), &sd, &view);
+						if (FAILED(a_device->CreateShaderResourceView(in.texture.Get(), &sd, &view)) && srgb) {
+							// a plain (not typeless) shared texture can't be read as sRGB: read it as it is
+							sd.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+							a_device->CreateShaderResourceView(in.texture.Get(), &sd, &view);
+						}
 					}
 					// why a GPU frame couldn't be drawn (logged once; after a run of failures: CPU decoding instead)
 					const char* miss = nullptr;

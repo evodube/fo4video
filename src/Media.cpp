@@ -55,7 +55,7 @@ namespace fv
 			};
 			static const Name kNames[]{
 				{ 0x1610, "AAC" }, { 0x00FF, "AAC (raw)" }, { 0x0055, "MP3" }, { 0x0050, "MPEG audio" }, { 0x2000, "AC-3" },
-				{ 0xA7FB87AF, "E-AC-3" }, { 0x0001, "PCM" }, { 0x0003, "float PCM" }, { 0x0161, "WMA" }, { 0x0162, "WMA Pro" },
+				{ 0xA7FB87AF, "E-AC-3" }, { 0xE06D802C, "AC-3" }, { 0x0001, "PCM" }, { 0x0003, "float PCM" }, { 0x0161, "WMA" }, { 0x0162, "WMA Pro" },
 				{ 0xF1AC, "FLAC" }, { 0x704F, "Opus" }, { 0x6C61, "ALAC" }, { fcc('H', '2', '6', '4'), "H.264" },
 				{ fcc('h', '2', '6', '4'), "H.264" }, { fcc('H', 'E', 'V', 'C'), "HEVC" }, { fcc('V', 'P', '9', '0'), "VP9" },
 				{ fcc('V', 'P', '8', '0'), "VP8" }, { fcc('A', 'V', '0', '1'), "AV1" }, { fcc('M', 'P', '4', 'V'), "MPEG-4 part 2" },
@@ -899,13 +899,41 @@ namespace fv
 			desc.Usage = D3D11_USAGE_DEFAULT;
 			desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
 			desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
-			HRESULT texHr = g_gpu.device->CreateTexture2D(&desc, nullptr, &a_frame.gpuTexture);
-			if (FAILED(texHr)) {
-				desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;  // some drivers won't share a typeless texture
-				const HRESULT again = g_gpu.device->CreateTexture2D(&desc, nullptr, &a_frame.gpuTexture);
-				if (FAILED(again)) {
-					return fail(std::format("couldn't make a {}x{} shared texture: {} / {}", a_w, a_h, HrStr(texHr), HrStr(again)).c_str());
+			// Some drivers only share a texture that can also be drawn into (render target), or only in a plain format:
+			// try the variants in turn and remember the one that works.
+			struct Variant
+			{
+				DXGI_FORMAT format;
+				UINT        bind;
+				const char* name;
+			};
+			static const Variant kVariants[]{
+				{ DXGI_FORMAT_B8G8R8A8_TYPELESS, D3D11_BIND_SHADER_RESOURCE, "typeless" },
+				{ DXGI_FORMAT_B8G8R8A8_TYPELESS, D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET, "typeless + render target" },
+				{ DXGI_FORMAT_B8G8R8A8_UNORM, D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET, "BGRA + render target" },
+				{ DXGI_FORMAT_B8G8R8A8_UNORM, D3D11_BIND_SHADER_RESOURCE, "BGRA" },
+			};
+			static std::atomic<int> s_variant{ -1 };  // the one that worked
+			std::string tried;
+			bool        made = false;
+			for (int v = 0; v < static_cast<int>(std::size(kVariants)) && !made; ++v) {
+				if (s_variant >= 0 && v != s_variant) {
+					continue;
 				}
+				desc.Format = kVariants[v].format;
+				desc.BindFlags = kVariants[v].bind;
+				const HRESULT hr = g_gpu.device->CreateTexture2D(&desc, nullptr, a_frame.gpuTexture.ReleaseAndGetAddressOf());
+				if (SUCCEEDED(hr)) {
+					made = true;
+					if (s_variant.exchange(v) != v && v > 0) {
+						log::info("GPU decoding: shared textures work here as {}", kVariants[v].name);
+					}
+				} else {
+					tried += std::format("{}{}: {}", tried.empty() ? "" : ", ", kVariants[v].name, HrStr(hr));
+				}
+			}
+			if (!made) {
+				return fail(std::format("couldn't make a {}x{} shared texture ({})", a_w, a_h, tried).c_str());
 			}
 			ComPtr<IDXGIResource> res;
 			if (FAILED(a_frame.gpuTexture.As(&res)) || FAILED(res->GetSharedHandle(&a_frame.gpuShared))) {
