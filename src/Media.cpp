@@ -104,6 +104,53 @@ namespace fv
 			return out;
 		}
 
+		// Which decoders Windows will use for the usual formats. Codec packs add their own here, and those are a common
+		// cause of slow, broken or odd playback (for problem reports).
+		void LogDecoders()
+		{
+			// MFT_FRIENDLY_NAME_Attribute (defined here so no extra SDK header is needed)
+			static const GUID kFriendlyName{ 0x314ffbae, 0x5b41, 0x4c95, { 0x9c, 0x19, 0x4e, 0x7d, 0x58, 0x6f, 0xac, 0xe3 } };
+			struct Kind
+			{
+				GUID        category;
+				GUID        subtype;
+				const char* name;
+			};
+			const Kind kinds[]{
+				{ MFT_CATEGORY_VIDEO_DECODER, MFVideoFormat_H264, "H.264" },
+				{ MFT_CATEGORY_VIDEO_DECODER, MFVideoFormat_HEVC, "HEVC" },
+				{ MFT_CATEGORY_VIDEO_DECODER, MFVideoFormat_MP4V, "MPEG-4 part 2" },
+				{ MFT_CATEGORY_AUDIO_DECODER, MFAudioFormat_AAC, "AAC" },
+				{ MFT_CATEGORY_AUDIO_DECODER, MFAudioFormat_Dolby_AC3, "AC-3" },
+			};
+			for (const auto& k : kinds) {
+				MFT_REGISTER_TYPE_INFO input{ k.category == MFT_CATEGORY_VIDEO_DECODER ? MFMediaType_Video : MFMediaType_Audio, k.subtype };
+				IMFActivate** found = nullptr;
+				UINT32        count = 0;
+				if (FAILED(::MFTEnumEx(k.category, MFT_ENUM_FLAG_ALL, &input, nullptr, &found, &count))) {
+					continue;
+				}
+				std::string list;
+				for (UINT32 i = 0; i < count; ++i) {
+					WCHAR* text = nullptr;
+					UINT32 len = 0;
+					std::string name = "?";
+					if (SUCCEEDED(found[i]->GetAllocatedString(kFriendlyName, &text, &len)) && text) {
+						const int n = ::WideCharToMultiByte(CP_UTF8, 0, text, -1, nullptr, 0, nullptr, nullptr);
+						if (n > 1) {
+							name.assign(static_cast<std::size_t>(n - 1), '\0');
+							::WideCharToMultiByte(CP_UTF8, 0, text, -1, name.data(), n, nullptr, nullptr);
+						}
+						::CoTaskMemFree(text);
+					}
+					list += (list.empty() ? "" : ", ") + name;
+					found[i]->Release();
+				}
+				::CoTaskMemFree(found);
+				log::info("decoders for {}: {}", k.name, list.empty() ? "none" : list);
+			}
+		}
+
 		GpuDecode         g_gpu;
 		std::atomic<bool> g_gpuDisabled{ false };
 
@@ -184,6 +231,7 @@ namespace fv
 			ok = SUCCEEDED(hr);
 			if (ok) {
 				log::info("Media Foundation started");
+				LogDecoders();
 			} else {
 				log::error("MFStartup failed ({})", HrStr(hr));
 			}

@@ -2,6 +2,8 @@
 
 #include "Manager.h"
 
+#include <intrin.h>
+
 namespace fv::Renderer
 {
 	namespace
@@ -68,6 +70,72 @@ namespace fv::Renderer
 				}
 			}
 			log::info("graphics mods in the game folder: {}", found.empty() ? "none found" : found);
+		}
+
+		std::string Utf8(const wchar_t* a_text)
+		{
+			const int len = ::WideCharToMultiByte(CP_UTF8, 0, a_text, -1, nullptr, 0, nullptr, nullptr);
+			std::string out;
+			if (len > 1) {
+				out.assign(static_cast<std::size_t>(len - 1), '\0');
+				::WideCharToMultiByte(CP_UTF8, 0, a_text, -1, out.data(), len, nullptr, nullptr);
+			}
+			return out;
+		}
+
+		// The PC, for problem reports: CPU, memory, Windows, which graphics card the game draws on and every graphics
+		// adapter Windows has (a game running on the CPU's built-in graphics is a common cause of slow or missing video).
+		void LogSystem(ID3D11Device* a_gameDevice)
+		{
+			// CPU name from the processor itself
+			int  regs[4]{};
+			char brand[49]{};
+			__cpuid(regs, 0x80000000);
+			if (static_cast<unsigned>(regs[0]) >= 0x80000004) {
+				for (int i = 0; i < 3; ++i) {
+					__cpuid(regs, 0x80000002 + i);
+					std::memcpy(brand + i * 16, regs, 16);
+				}
+			}
+			std::string cpu = brand;
+			cpu.erase(0, cpu.find_first_not_of(' '));
+			MEMORYSTATUSEX mem{ sizeof(mem) };
+			::GlobalMemoryStatusEx(&mem);
+			std::string windows = "?";
+			using RtlGetVersion_t = LONG(WINAPI*)(OSVERSIONINFOW*);
+			if (auto* ntdll = ::GetModuleHandleW(L"ntdll.dll")) {
+				if (auto rtl = reinterpret_cast<RtlGetVersion_t>(::GetProcAddress(ntdll, "RtlGetVersion"))) {
+					OSVERSIONINFOW v{ sizeof(v) };
+					if (rtl(&v) == 0) {
+						windows = std::format("{} (build {})", v.dwBuildNumber >= 22000 ? "11" : std::to_string(v.dwMajorVersion), v.dwBuildNumber);
+					}
+				}
+			}
+			log::info("system: CPU {} ({} threads), {} GB memory, Windows {}", cpu.empty() ? "?" : cpu, std::thread::hardware_concurrency(),
+				(mem.ullTotalPhys + (512ull << 20)) >> 30, windows);
+
+			// the card the game draws on
+			ComPtr<IDXGIDevice>  dxgi;
+			ComPtr<IDXGIAdapter> adapter;
+			DXGI_ADAPTER_DESC    desc{};
+			if (a_gameDevice && SUCCEEDED(a_gameDevice->QueryInterface(IID_PPV_ARGS(&dxgi))) && SUCCEEDED(dxgi->GetAdapter(&adapter)) &&
+				SUCCEEDED(adapter->GetDesc(&desc))) {
+				log::info("system: the game draws on {} ({} MB video memory)", Utf8(desc.Description), desc.DedicatedVideoMemory >> 20);
+			}
+
+			// every adapter
+			ComPtr<IDXGIFactory1> factory;
+			if (SUCCEEDED(::CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) {
+				std::string list;
+				ComPtr<IDXGIAdapter1> a;
+				for (UINT i = 0; factory->EnumAdapters1(i, a.ReleaseAndGetAddressOf()) != DXGI_ERROR_NOT_FOUND; ++i) {
+					DXGI_ADAPTER_DESC1 d{};
+					if (SUCCEEDED(a->GetDesc1(&d)) && !(d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE)) {
+						list += std::format("{}{} ({} MB)", list.empty() ? "" : "; ", Utf8(d.Description), d.DedicatedVideoMemory >> 20);
+					}
+				}
+				log::info("system: graphics adapters: {}", list.empty() ? "none found" : list);
+			}
 		}
 
 		HRESULT STDMETHODCALLTYPE HookedPresent(IDXGISwapChain* a_swapChain, UINT a_syncInterval, UINT a_flags)
@@ -152,6 +220,7 @@ namespace fv::Renderer
 			log::info("renderer: swapChain={} device={} context={}", static_cast<void*>(swapChain), static_cast<void*>(g_device.Get()),
 				static_cast<void*>(g_context.Get()));
 			LogGraphicsMods();
+			LogSystem(g_device.Get());
 			return HookPresent(swapChain);
 		}
 		ComPtr<ID3D11DeviceContext> chainContext;
@@ -185,6 +254,7 @@ namespace fv::Renderer
 			static_cast<void*>(g_device.Get()), static_cast<void*>(chainDevice.Get()), static_cast<void*>(data->device),
 			static_cast<void*>(g_context.Get()));
 		LogGraphicsMods();
+		LogSystem(g_device.Get());
 		return HookPresent(swapChain);
 	}
 }
