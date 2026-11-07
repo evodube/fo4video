@@ -110,7 +110,7 @@ namespace fv
 		std::uint64_t                _checkFrames{ 0 };
 		std::int64_t                 _checkTime{ 0 };
 		std::atomic<bool>            _audioEOS{ false };
-		std::uint64_t                _samplesBase{ 0 };
+		std::atomic<std::uint64_t>   _samplesBase{ 0 };
 
 		// clock (used when there is no audio)
 		using steady_t = std::chrono::steady_clock;
@@ -118,7 +118,12 @@ namespace fv
 		steady_t::time_point _pauseStart{};
 		steady_t::duration   _pausedTotal{};
 		bool                _paused{ false };
-		std::int64_t        _clockOffset{ 0 };  // where the clock starts after a seek
+		std::atomic<std::int64_t> _clockOffset{ 0 };  // where the clock starts after a seek
+		std::atomic<bool>         _anchorPending{ false };  // the next audio sample says where the sound really starts
+		std::int64_t              _askedPos{ 0 };           // where a start / jump asked to go
+		std::uint32_t             _srcChannels{ 0 };        // channels the decoder delivers (downmixed to the voice's if different)
+		std::chrono::steady_clock::time_point _waitSince{}; // the next picture has been waiting far ahead of the sound since
+		bool                      _catchUpLogged{ false };
 
 		// threads
 		std::atomic<bool> _stop{ false };

@@ -70,6 +70,40 @@ namespace fv
 			return std::format("{:08X}", a_sub.Data1);  // anything else: its id
 		}
 
+		// 16-bit PCM from a_srcCh channels to a_dstCh (1 or 2). Surround is in the usual order: front left, front right,
+		// centre, LFE, then the back / side pairs; centre and surrounds are mixed in at -3 dB, LFE left out.
+		std::vector<std::uint8_t> Downmix16(const BYTE* a_data, DWORD a_bytes, std::uint32_t a_srcCh, std::uint32_t a_dstCh)
+		{
+			const auto* in = reinterpret_cast<const std::int16_t*>(a_data);
+			const auto  frames = a_bytes / (2 * a_srcCh);
+			std::vector<std::uint8_t> out(frames * 2 * a_dstCh);
+			auto*                     o = reinterpret_cast<std::int16_t*>(out.data());
+			const auto clamp = [](float a_v) { return static_cast<std::int16_t>(std::clamp(a_v, -32768.0f, 32767.0f)); };
+			for (DWORD f = 0; f < frames; ++f) {
+				const std::int16_t* s = in + f * a_srcCh;
+				float               l = s[0], r = a_srcCh > 1 ? s[1] : s[0];
+				if (a_srcCh >= 3) {
+					l += 0.707f * s[2];
+					r += 0.707f * s[2];
+				}
+				for (std::uint32_t c = 4; c + 1 < a_srcCh; c += 2) {  // surround pairs
+					l += 0.707f * s[c];
+					r += 0.707f * s[c + 1];
+				}
+				const float scale = a_srcCh >= 3 ? 0.5f : 1.0f;  // keep the sum from clipping
+				if (a_dstCh == 1) {
+					o[f] = clamp((l + r) * 0.5f * scale);
+				} else {
+					o[f * a_dstCh] = clamp(l * scale);
+					o[f * a_dstCh + 1] = clamp(r * scale);
+					for (std::uint32_t c = 2; c < a_dstCh; ++c) {
+						o[f * a_dstCh + c] = 0;
+					}
+				}
+			}
+			return out;
+		}
+
 		GpuDecode         g_gpu;
 		std::atomic<bool> g_gpuDisabled{ false };
 
@@ -403,6 +437,7 @@ namespace fv
 		_blockAlign = wfx->nBlockAlign;
 		_audioRate = wfx->nSamplesPerSec;
 		_audioChannels = wfx->nChannels;
+		_srcChannels = wfx->nChannels;
 		log::info("audio: {} Hz, {} ch, {} bit -> {}", wfx->nSamplesPerSec, wfx->nChannels, wfx->wBitsPerSample, ok ? "ok" : "voice failed");
 		::CoTaskMemFree(wfx);
 
@@ -419,6 +454,8 @@ namespace fv
 			return;
 		}
 		_stop = false;
+		_anchorPending = HasAudio();  // the first sound decoded sets the clock (see AudioThread)
+		_waitSince = {};
 		_wallStart = steady_t::now();
 		_pausedTotal = {};
 		if (_paused) {
@@ -477,6 +514,7 @@ namespace fv
 		var.vt = VT_I8;
 		var.hVal.QuadPart = a_position;
 		_clockOffset = a_position;
+		_askedPos = a_position;
 		if (_videoReader) {
 			_videoReader->SetCurrentPosition(GUID_NULL, var);
 		}
@@ -515,7 +553,8 @@ namespace fv
 
 		if (HasAudio() && _audio->SampleRate() > 0) {
 			const auto played = _audio->SamplesPlayed();
-			const auto samples = played >= _samplesBase ? played - _samplesBase : 0;
+			const std::uint64_t base = _samplesBase.load();
+			const auto          samples = played >= base ? played - base : 0;
 			const auto audioClock = _clockOffset + static_cast<std::int64_t>(samples * 10'000'000ull / _audio->SampleRate());
 			// if the audio track ended early, keep the video going on the wall clock
 			if (_audioEOS && _audio->Queued() == 0) {
@@ -571,6 +610,25 @@ namespace fv
 				a_out = std::move(_frames.front());
 				_frames.pop_front();
 				got = true;
+			}
+			// The next picture is more than a second ahead of the sound and the queue is full (so nothing else can come):
+			// the picture would sit on one frame while the sound plays. After 2 s of that, move the clock to the picture.
+			const auto now = steady_t::now();
+			if (!got && !_paused && _frames.size() >= kMaxFrames && _frames.front().pts > a_clock + 10'000'000) {
+				if (_waitSince == steady_t::time_point{}) {
+					_waitSince = now;
+				} else if (now - _waitSince > 2s) {
+					const auto ahead = _frames.front().pts - a_clock;
+					if (!_catchUpLogged) {
+						_catchUpLogged = true;
+						log::warn("video: the next picture is {:.1f} s ahead of the sound (picture at {:.1f} s, sound at {:.1f} s); catching the clock up",
+							ahead / 1.0e7, _frames.front().pts / 1.0e7, a_clock / 1.0e7);
+					}
+					_clockOffset += ahead;
+					_waitSince = {};
+				}
+			} else {
+				_waitSince = {};
 			}
 		}
 		if (got) {
@@ -802,8 +860,15 @@ namespace fv
 		}
 		ComPtr<ID3D11Texture2D> src;
 		UINT                    sub = 0;
-		if (FAILED(dxgi->GetResource(IID_PPV_ARGS(&src))) || FAILED(dxgi->GetSubresourceIndex(&sub))) {
+		static std::atomic<bool> s_failLogged{ false };
+		const auto fail = [&](const char* a_why) {
+			if (!s_failLogged.exchange(true)) {
+				log::warn("GPU decoding: a frame couldn't be copied ({}); after a few seconds this video switches to CPU decoding", a_why);
+			}
 			return false;
+		};
+		if (FAILED(dxgi->GetResource(IID_PPV_ARGS(&src))) || FAILED(dxgi->GetSubresourceIndex(&sub))) {
+			return fail("the decoder's frame has no texture");
 		}
 
 		// our shared texture for this frame (kept with the frame in the pool, remade if the size changes)
@@ -822,12 +887,12 @@ namespace fv
 			desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
 			desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
 			if (FAILED(g_gpu.device->CreateTexture2D(&desc, nullptr, &a_frame.gpuTexture))) {
-				return false;
+				return fail(std::format("couldn't make a {}x{} shared texture", a_w, a_h).c_str());
 			}
 			ComPtr<IDXGIResource> res;
 			if (FAILED(a_frame.gpuTexture.As(&res)) || FAILED(res->GetSharedHandle(&a_frame.gpuShared))) {
 				a_frame.gpuTexture.Reset();
-				return false;
+				return fail("couldn't share the texture with the game");
 			}
 			a_frame.gpuWidth = a_w;
 			a_frame.gpuHeight = a_h;
@@ -839,6 +904,13 @@ namespace fv
 		}
 		D3D11_TEXTURE2D_DESC srcDesc{};
 		src->GetDesc(&srcDesc);
+		static std::atomic<bool> s_formatLogged{ false };
+		if (srcDesc.Format != DXGI_FORMAT_B8G8R8A8_UNORM && srcDesc.Format != DXGI_FORMAT_B8G8R8A8_TYPELESS &&
+			srcDesc.Format != DXGI_FORMAT_B8G8R8A8_UNORM_SRGB && srcDesc.Format != DXGI_FORMAT_B8G8R8X8_UNORM &&
+			!s_formatLogged.exchange(true)) {
+			log::warn("GPU decoding: the decoder's frames are DXGI format {}, not BGRA ({}x{}); the picture may not show",
+				static_cast<int>(srcDesc.Format), srcDesc.Width, srcDesc.Height);
+		}
 		D3D11_BOX box{ a_cropX, a_cropY, 0, std::min(a_cropX + a_w, srcDesc.Width), std::min(a_cropY + a_h, srcDesc.Height), 1 };
 		g_gpu.context->CopySubresourceRegion(a_frame.gpuTexture.Get(), 0, 0, 0, 0, src.Get(), sub, &box);
 		g_gpu.context->Flush();
@@ -881,9 +953,14 @@ namespace fv
 				UINT32               size = 0;
 				if (SUCCEEDED(_audioReader->GetCurrentMediaType(static_cast<DWORD>(MF_SOURCE_READER_FIRST_AUDIO_STREAM), &cur)) &&
 					SUCCEEDED(::MFCreateWaveFormatExFromMFMediaType(cur.Get(), &wfx, &size)) && wfx) {
-					if (wfx->nChannels != _audioChannels) {
-						log::warn("audio: the track changed from {} to {} channels while playing; the sound may be wrong", _audioChannels,
-							wfx->nChannels);
+					if (wfx->nChannels != _srcChannels && wfx->nSamplesPerSec == _audioRate && wfx->wBitsPerSample == 16 && wfx->nChannels > 0) {
+						// e.g. AC-3 that says 2 channels and then decodes 5.1: mix it down to the voice's channels ourselves
+						log::info("audio: the track changed from {} to {} channels while playing; mixing it to {}", _srcChannels, wfx->nChannels,
+							_audioChannels);
+						_srcChannels = wfx->nChannels;
+					} else if (wfx->nChannels != _srcChannels) {
+						log::warn("audio: the track changed from {} to {} channels ({} Hz) while playing; the sound may be wrong", _srcChannels,
+							wfx->nChannels, wfx->nSamplesPerSec);
 					} else if (wfx->nSamplesPerSec != _audioRate) {
 						log::info("audio: the track changed from {} Hz to {} Hz while playing; following it", _audioRate, wfx->nSamplesPerSec);
 						for (int i = 0; i < 200 && _audio->Queued() > 0 && !_stop; ++i) {
@@ -905,6 +982,17 @@ namespace fv
 			if (!sample) {
 				continue;
 			}
+			// the first sound after a start or jump: the clock starts where the sound really is. A jump can land a few
+			// seconds from where it was asked (MKV / AVI files seek to the nearest index point); counting from the asked
+			// spot left the sound and the picture apart, and the picture waited on one frame.
+			if (_anchorPending.exchange(false)) {
+				if (std::abs(timestamp - _askedPos) > 2'500'000) {
+					log::info("audio: the sound starts at {:.2f} s (asked for {:.2f} s); the clock follows the sound", timestamp / 1.0e7,
+						_askedPos / 1.0e7);
+				}
+				_samplesBase = _audio->SamplesPlayed();
+				_clockOffset = timestamp;
+			}
 
 			ComPtr<IMFMediaBuffer> buffer;
 			if (FAILED(sample->ConvertToContiguousBuffer(&buffer))) {
@@ -915,8 +1003,14 @@ namespace fv
 			if (FAILED(buffer->Lock(&data, nullptr, &length))) {
 				continue;
 			}
-			std::vector<std::uint8_t> pcm(data, data + length);
+			std::vector<std::uint8_t> pcm;
+			if (_srcChannels != _audioChannels && _srcChannels > 0 && _audioChannels > 0) {
+				pcm = Downmix16(data, length, _srcChannels, _audioChannels);
+			} else {
+				pcm.assign(data, data + length);
+			}
 			buffer->Unlock();
+			length = static_cast<DWORD>(pcm.size());
 
 			// once, early on: does the sound arriving match the speed the voice plays at? (bytes per second of track time)
 			if (!_audioChecked && _blockAlign > 0) {
