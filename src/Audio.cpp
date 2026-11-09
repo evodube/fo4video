@@ -64,6 +64,7 @@ namespace fv
 		}
 		_sampleRate = a_format.nSamplesPerSec;
 		_channels = a_format.nChannels;
+		_blockAlign = a_format.nBlockAlign;
 		return true;
 	}
 
@@ -113,14 +114,72 @@ namespace fv
 		return state.BuffersQueued;
 	}
 
+	namespace
+	{
+		std::int64_t Qpc()
+		{
+			LARGE_INTEGER t{};
+			::QueryPerformanceCounter(&t);
+			return t.QuadPart;
+		}
+
+		std::int64_t QpcFrequency()
+		{
+			static const std::int64_t f = [] {
+				LARGE_INTEGER t{};
+				::QueryPerformanceFrequency(&t);
+				return t.QuadPart;
+			}();
+			return f;
+		}
+	}
+
+	std::uint64_t AudioStream::OwnCount() const
+	{
+		std::uint64_t count = _endedFrames.load();
+		const auto    start = _bufStart.load();
+		const auto    frames = _bufFrames.load();
+		if (start != 0 && frames > 0) {
+			std::int64_t part = _heldPart.load();
+			if (_running) {
+				part = (Qpc() - start) * static_cast<std::int64_t>(_sampleRate) / QpcFrequency();
+			}
+			count += static_cast<std::uint64_t>(std::clamp<std::int64_t>(part, 0, frames));
+		}
+		return count;
+	}
+
 	std::uint64_t AudioStream::SamplesPlayed() const
 	{
 		if (!_voice) {
 			return 0;
 		}
+		const std::uint64_t own = OwnCount();
+		if (_stateBroken) {
+			return own;
+		}
 		XAUDIO2_VOICE_STATE state{};
 		_voice->GetState(&state, 0);
-		return state.SamplesPlayed;
+		const std::uint64_t reported = state.SamplesPlayed;
+		// after a second of sound: if the voice's own figure is stuck or nonsense, use our count from now on
+		const std::uint64_t second = _sampleRate;
+		if (own > second && (reported + second / 2 < own || reported > own + 2 * second)) {
+			if (!_stateBroken.exchange(true)) {
+				log::warn("audio: the voice reports {} samples played but {} have (another mod patches XAudio2, e.g. Audio Switch Support); "
+				          "counting them myself",
+					reported, own);
+			}
+			return own;
+		}
+		return reported;
+	}
+
+	void AudioStream::OnBufferStart(void* a_context) noexcept
+	{
+		const auto* data = static_cast<std::vector<std::uint8_t>*>(a_context);
+		_bufFrames = data && _blockAlign ? static_cast<std::uint32_t>(data->size() / _blockAlign) : 0;
+		_heldPart = 0;
+		_bufStart = Qpc();
 	}
 
 	bool AudioStream::SetSampleRate(std::uint32_t a_rate)
@@ -135,6 +194,10 @@ namespace fv
 	void AudioStream::Start()
 	{
 		if (_voice && !_running) {
+			// carry on the playing buffer's count from where the pause left it
+			if (_bufStart != 0) {
+				_bufStart = Qpc() - _heldPart.load() * QpcFrequency() / std::max<std::int64_t>(1, _sampleRate);
+			}
 			_voice->Start(0);
 			_running = true;
 		}
@@ -144,6 +207,10 @@ namespace fv
 	{
 		if (_voice && _running) {
 			_voice->Stop(0);
+			if (const auto start = _bufStart.load(); start != 0) {
+				_heldPart = std::clamp<std::int64_t>((Qpc() - start) * static_cast<std::int64_t>(_sampleRate) / QpcFrequency(), 0,
+					_bufFrames.load());
+			}
 			_running = false;
 		}
 	}
@@ -151,7 +218,16 @@ namespace fv
 	void AudioStream::Flush()
 	{
 		if (_voice) {
+			// flushed buffers also report OnBufferEnd: they were never heard, so they don't count as played
+			_flushing = true;
 			_voice->FlushSourceBuffers();
+			for (int i = 0; i < 50 && Queued() > 0; ++i) {
+				std::this_thread::sleep_for(2ms);
+			}
+			_flushing = false;
+			_bufStart = 0;
+			_bufFrames = 0;
+			_heldPart = 0;
 		}
 	}
 
@@ -202,7 +278,13 @@ namespace fv
 
 	void AudioStream::OnBufferEnd(void* a_context) noexcept
 	{
-		delete static_cast<std::vector<std::uint8_t>*>(a_context);
+		auto* data = static_cast<std::vector<std::uint8_t>*>(a_context);
+		if (!_flushing && data && _blockAlign) {
+			_endedFrames += data->size() / _blockAlign;
+		}
+		_bufStart = 0;
+		_bufFrames = 0;
+		delete data;
 	}
 
 	void AudioStream::OnVoiceError(void*, HRESULT a_error) noexcept

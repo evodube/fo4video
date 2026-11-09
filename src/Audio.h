@@ -54,7 +54,7 @@ namespace fv
 		void STDMETHODCALLTYPE OnVoiceProcessingPassStart(UINT32) noexcept override {}
 		void STDMETHODCALLTYPE OnVoiceProcessingPassEnd() noexcept override {}
 		void STDMETHODCALLTYPE OnStreamEnd() noexcept override {}
-		void STDMETHODCALLTYPE OnBufferStart(void*) noexcept override {}
+		void STDMETHODCALLTYPE OnBufferStart(void* a_context) noexcept override;
 		void STDMETHODCALLTYPE OnBufferEnd(void* a_context) noexcept override;
 		void STDMETHODCALLTYPE OnLoopEnd(void*) noexcept override {}
 		void STDMETHODCALLTYPE OnVoiceError(void*, HRESULT a_error) noexcept override;
@@ -66,5 +66,17 @@ namespace fv
 		float                _lastVolume{ -1.0f };
 		std::uint32_t        _channels{ 0 };
 		float                _lastPan{ 9.0f };
+		std::uint32_t        _blockAlign{ 0 };
+
+		// Our own count of what has played, from the buffer callbacks: some audio mods (e.g. Audio Switch Support /
+		// AudioDeviceFollowFix) patch XAudio2's GetState for every voice in the game, and then the voice reports no
+		// play position - the sound plays but the picture, which follows it, stays on one frame.
+		std::uint64_t                      OwnCount() const;
+		std::atomic<std::uint64_t>         _endedFrames{ 0 };  // frames of buffers that finished playing
+		std::atomic<std::int64_t>          _bufStart{ 0 };     // QPC when the playing buffer started (0 = none)
+		std::atomic<std::uint32_t>         _bufFrames{ 0 };    // its length
+		std::atomic<std::int64_t>          _heldPart{ 0 };     // frames of it played before a pause
+		std::atomic<bool>                  _flushing{ false };
+		mutable std::atomic<bool>          _stateBroken{ false };
 	};
 }
