@@ -31,6 +31,8 @@ namespace fv::Remote
 		std::vector<std::string>  g_videoNames;
 		std::vector<std::string>  g_videoFolders;  // each video's folder ("" = the video folder itself)
 		std::vector<std::string>  g_openPlaylists;  // playlists unfolded in the Playlists panel
+		char                      g_search[96]{};    // the Videos panel's search box
+		char                      g_plSearch[96]{};  // the Playlists panel's search box
 		std::atomic<bool>         g_typing{ false };  // search box has the keyboard: W/A/S/D are letters, not walking
 
 		// shown from a game task, never from the remote's UI thread (see Manager's Notify)
@@ -672,7 +674,7 @@ namespace fv::Remote
 			case Key::kCenter: return "MUTE";
 			case Key::kPower: return "POWER";
 			case Key::kHome: return "HOME";
-			case Key::kSearch: return "VIDEOS";
+			case Key::kSearch: return "SEARCH";
 			case Key::kName: return "NAME BAR";
 			case Key::kClose: return "CLOSE";
 			case Key::kLock: return "LOCK";
@@ -883,12 +885,18 @@ namespace fv::Remote
 				Post(a_target, [file = g_videoFiles[a_i]](RE::TESObjectREFR* a_ref) { Manager::Get().RemotePlayFile(a_ref, file); });
 			};
 
-			// Videos: only the loose videos (straight in Videos, or Videos\\Posters for a poster); playlists have their own panel
-			g_typing = false;
+			// Videos: search bar on top, then only the loose videos (straight in Videos, or Videos\\Posters for a poster)
+			// that match; playlists have their own panel
+			bool typing = false;
 			if (g_listOpen) {
 				if (PanelBegin("##RealVideosVideos", "Videos", ImVec2{ g_remoteRect.x - panelW - gap, g_remoteRect.y }, size, g_listOpen, a_scale)) {
-					const auto loose = [](std::size_t a_i) {
-						return g_videoFolders[a_i].empty() || _stricmp(g_videoFolders[a_i].c_str(), "Posters") == 0;
+					SetNextItemWidth(-1.0f);
+					InputTextWithHint("##RealVideosSearch", "Search videos...", g_search, sizeof(g_search));
+					typing |= IsItemActive();
+					const auto query = LowerAscii(g_search);
+					const auto loose = [&](std::size_t a_i) {
+						return (g_videoFolders[a_i].empty() || _stricmp(g_videoFolders[a_i].c_str(), "Posters") == 0) &&
+						       (query.empty() || LowerAscii(g_videoNames[a_i]).find(query) != std::string::npos);
 					};
 					std::size_t found = 0;
 					for (std::size_t i = 0; i < g_videoNames.size(); ++i) {
@@ -905,7 +913,9 @@ namespace fv::Remote
 					std::size_t row = 0;
 					if (BeginChild("##RealVideosResults", ImVec2{ 0.0f, 0.0f }, 0, 0)) {
 						SetWindowFontScale(g_panelFont);
-						if (found == 0) {
+						if (found == 0 && !query.empty()) {
+							TextWrapped("No match here. The Playlists panel has its own search.");
+						} else if (found == 0) {
 							TextWrapped(g_listPosters ? "No videos in Data\\Videos\\Posters. Poster playlists are in the Playlists tab." :
 														"No videos in Data\\Videos. Playlists are in the Playlists tab.");
 						}
@@ -937,19 +947,40 @@ namespace fv::Remote
 				PanelEnd();
 			}
 
-			// Playlists: every folder in Videos\\Playlists; play from the start, or unfold and pick a video
+			// Playlists: every folder in Videos\\Playlists; play from the start, or unfold and pick a video. The search
+			// finds videos (and playlist names): matching playlists open by themselves, showing only the matches
 			if (g_playlistsOpen) {
 				if (PanelBegin("##RealVideosPlaylists", "Playlists", ImVec2{ g_remoteRect.x + g_remoteRect.z + gap, g_remoteRect.y }, size,
 						g_playlistsOpen, a_scale)) {
+					SetNextItemWidth(-1.0f);
+					InputTextWithHint("##RealVideosPlSearch", "Search playlists...", g_plSearch, sizeof(g_plSearch));
+					typing |= IsItemActive();
+					const auto query = LowerAscii(g_plSearch);
+					const auto videoHit = [&](std::size_t a_i) {
+						return !query.empty() && LowerAscii(g_videoNames[a_i]).find(query) != std::string::npos;
+					};
 					std::vector<std::string> names;
-					for (const auto& f : g_videoFolders) {
-						if (auto pl = PlaylistOf(f); !pl.empty() && std::ranges::find(names, pl) == names.end()) {
+					for (std::size_t i = 0; i < g_videoFolders.size(); ++i) {
+						auto pl = PlaylistOf(g_videoFolders[i]);
+						if (pl.empty() || std::ranges::find(names, pl) != names.end()) {
+							continue;
+						}
+						if (query.empty() || LowerAscii(pl).find(query) != std::string::npos || videoHit(i)) {
 							names.push_back(pl);
+						} else {
+							for (std::size_t j = i + 1; j < g_videoFolders.size(); ++j) {
+								if (videoHit(j) && PlaylistOf(g_videoFolders[j]) == pl) {
+									names.push_back(pl);
+									break;
+								}
+							}
 						}
 					}
 					if (BeginChild("##RealVideosPlaylistList", ImVec2{ 0.0f, 0.0f }, 0, 0)) {
 						SetWindowFontScale(g_panelFont);
-						if (names.empty()) {
+						if (names.empty() && !query.empty()) {
+							TextWrapped("No playlist has a video like that.");
+						} else if (names.empty()) {
 							TextWrapped(g_listPosters ?
 											"No poster playlists yet. Make folders in Data\\Videos\\Posters\\Playlists, e.g. "
 											"Data\\Videos\\Posters\\Playlists\\Ads, and put videos in them." :
@@ -971,9 +1002,14 @@ namespace fv::Remote
 							}
 							SameLine();
 							auto       it = std::ranges::find(g_openPlaylists, name);
-							const bool unfolded = it != g_openPlaylists.end();
+							// searching: a playlist with matching videos opens by itself and shows just those
+							bool hits = false;
+							for (std::size_t i = 0; i < g_videoNames.size() && !hits; ++i) {
+								hits = videoHit(i) && PlaylistOf(g_videoFolders[i]) == name;
+							}
+							const bool unfolded = hits || it != g_openPlaylists.end();
 							const auto label = std::format("{} {}", unfolded ? "v" : ">", name);
-							if (PanelRow(label.c_str(), playing == name)) {
+							if (PanelRow(label.c_str(), playing == name) && !hits) {
 								if (unfolded) {
 									g_openPlaylists.erase(it);
 								} else {
@@ -983,7 +1019,7 @@ namespace fv::Remote
 							if (unfolded) {
 								Indent(std::max(16.0f, 60.0f * a_scale));
 								for (std::size_t i = 0; i < g_videoNames.size(); ++i) {
-									if (PlaylistOf(g_videoFolders[i]) != name) {
+									if (PlaylistOf(g_videoFolders[i]) != name || (hits && !videoHit(i))) {
 										continue;
 									}
 									PushID(static_cast<int>(i) + 100000);
@@ -1001,6 +1037,7 @@ namespace fv::Remote
 				}
 				PanelEnd();
 			}
+			g_typing = typing;
 		}
 
 		// controller buttons queued by PollPad: with the Videos list open the D-pad and A / B work the list,
