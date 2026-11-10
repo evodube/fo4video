@@ -59,6 +59,7 @@ namespace fv
 		bool                     onlySupportedScreens{ true };
 		bool                     aimToSelect{ true };     // hotkeys and the remote use the screen under the crosshair
 		float                    aimDistance{ 14000.0f };  // ~200 m
+		bool                     controller{ true };  // a game controller: L3 + R3 opens the remote, buttons work it
 		int                      keyRemote{ 0x75 };       // F6: open/close the remote  // F9/F10 only on TVs, VotW projectors/screens, the drive-in          // glowing TV screens: whole video, mesh UVs untouched (0.1 behaviour)
 		float                    nearbyRadius{ 15000.0f };    // projectors / Ctrl+F7 look for screens this close
 		float                    brightness{ 1.0f };

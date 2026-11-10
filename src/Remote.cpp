@@ -6,6 +6,8 @@
 
 #include "F4SEMenuFramework.h"
 
+#include <Xinput.h>
+
 // The remote: a small window drawn by F4SE Menu Framework (it owns ImGui, the mouse cursor and input blocking).
 // Drawing happens on the render thread; every button only queues the action for the game's main thread.
 namespace fv::Remote
@@ -261,6 +263,48 @@ namespace fv::Remote
 			kAll,
 			kPlaylists
 		};
+
+		// ---- game controller (XInput) ----
+		// Buttons are read on the present thread (Tick) and queued; the remote's own window (UI thread) acts on them.
+		enum class Pad
+		{
+			kA,
+			kB,
+			kX,
+			kY,
+			kLB,
+			kRB,
+			kUp,
+			kDown,
+			kLeft,
+			kRight,
+			kBack,
+			kStart
+		};
+		std::mutex       g_padLock;
+		std::vector<Pad> g_padQueue;
+		int              g_padRow = -1;           // the highlighted row in the Videos list (controller), -1 = none
+		bool             g_padScroll = false;     // scroll the highlighted row into view
+		bool             g_padActivate = false;   // play the highlighted row
+
+		using XInputGetState_t = DWORD(WINAPI*)(DWORD, XINPUT_STATE*);
+		XInputGetState_t PadApi()
+		{
+			// loaded by hand: works with whichever XInput the PC (or Proton) has, and no extra link dependency
+			static XInputGetState_t fn = [] {
+				for (const auto* dll : { "xinput1_4.dll", "xinput1_3.dll", "xinput9_1_0.dll" }) {
+					if (auto* mod = ::LoadLibraryA(dll)) {
+						if (auto* f = ::GetProcAddress(mod, "XInputGetState")) {
+							log::info("controller: using {}", dll);
+							return reinterpret_cast<XInputGetState_t>(f);
+						}
+					}
+				}
+				log::info("controller: XInput not available; controller support off");
+				return static_cast<XInputGetState_t>(nullptr);
+			}();
+			return fn;
+		}
 
 		bool   g_listOpen = false;       // the Videos (search) panel, left of the remote
 		bool   g_playlistsOpen = false;  // the Playlists panel, right of the remote
@@ -845,6 +889,14 @@ namespace fv::Remote
 						found += query.empty() || LowerAscii(g_videoNames[i]).find(query) != std::string::npos;
 					}
 					TextDisabled("%zu video%s", found, found == 1 ? "" : "s");
+					if (g_padRow >= static_cast<int>(found)) {
+						g_padRow = found ? static_cast<int>(found) - 1 : -1;
+					}
+					if (g_padRow >= 0) {
+						SameLine();
+						TextDisabled("  (D-pad, A to play)");
+					}
+					std::size_t row = 0;
 					if (BeginChild("##RealVideosResults", ImVec2{ 0.0f, 0.0f }, 0, 0)) {
 						SetWindowFontScale(g_panelFont);
 						for (std::size_t i = 0; i < g_videoNames.size(); ++i) {
@@ -853,9 +905,16 @@ namespace fv::Remote
 							}
 							PushID(static_cast<int>(i));
 							const bool current = isCurrent(i);
-							if (PanelRow(g_videoNames[i].c_str(), current)) {
+							const bool padSel = static_cast<int>(row) == g_padRow;
+							if (PanelRow(g_videoNames[i].c_str(), current || padSel) || (padSel && g_padActivate)) {
 								play(i);
+								g_padActivate = false;
 							}
+							if (padSel && g_padScroll) {
+								SetScrollHereY(0.5f);
+								g_padScroll = false;
+							}
+							++row;
 							if (const auto pl = PlaylistOf(g_videoFolders[i]); !pl.empty()) {
 								SameLine();
 								TextDisabled("%s", pl.c_str());
@@ -935,6 +994,67 @@ namespace fv::Remote
 			}
 		}
 
+		// controller buttons queued by PollPad: with the Videos list open the D-pad and A / B work the list,
+		// otherwise every button is a remote key
+		void HandlePad(std::uint32_t a_target, const RemoteView& a_view)
+		{
+			std::vector<Pad> pressed;
+			{
+				std::scoped_lock lock(g_padLock);
+				pressed.swap(g_padQueue);
+			}
+			for (const auto b : pressed) {
+				if (g_listOpen && (b == Pad::kUp || b == Pad::kDown || b == Pad::kA || b == Pad::kB)) {
+					switch (b) {
+					case Pad::kUp:
+						g_padRow = std::max(0, g_padRow - 1);
+						g_padScroll = true;
+						break;
+					case Pad::kDown:
+						g_padRow = g_padRow + 1;  // clamped to the list when it's drawn
+						g_padScroll = true;
+						break;
+					case Pad::kA:
+						if (g_padRow < 0) {
+							g_padRow = 0;  // first press picks the first row
+							g_padScroll = true;
+						} else {
+							g_padActivate = true;
+						}
+						break;
+					default:  // B: close the list
+						g_listOpen = false;
+						g_padRow = -1;
+						SaveState();
+						break;
+					}
+					continue;
+				}
+				Key key = Key::kNone;
+				switch (b) {
+				case Pad::kA: key = Key::kPlayPause; break;
+				case Pad::kB: key = Key::kClose; break;
+				case Pad::kX: key = Key::kCenter; break;
+				case Pad::kY: key = Key::kPower; break;
+				case Pad::kLB: key = Key::kRewind; break;
+				case Pad::kRB: key = Key::kForward; break;
+				case Pad::kUp: key = Key::kUp; break;
+				case Pad::kDown: key = Key::kDown; break;
+				case Pad::kLeft: key = Key::kLeft; break;
+				case Pad::kRight: key = Key::kRight; break;
+				case Pad::kBack: key = Key::kSearch; break;
+				case Pad::kStart: key = Key::kPlaylists; break;
+				}
+				if (key == Key::kSearch) {
+					g_padRow = g_listOpen ? -1 : 0;  // opening the list from the controller highlights its first row
+					g_padScroll = true;
+				}
+				if (key != Key::kNone) {
+					Press(key, a_target, a_view);  // logs "remote: clicked ..."
+				}
+			}
+		}
+
 		void __stdcall RenderWindow()
 		{
 			if (!g_drawnSinceOpen.exchange(true)) {
@@ -942,6 +1062,7 @@ namespace fv::Remote
 			}
 			const auto target = g_target.load();
 			const auto view = Manager::Get().View(target);
+			HandlePad(target, view);
 			auto*      viewport = GetMainViewport();
 			LoadState();
 			const float baseScale = viewport->Size.y * 0.5f / kDesignH;
@@ -1332,6 +1453,10 @@ namespace fv::Remote
 					}
 					Tip("Click, then press the key that should open and close the remote. Saved right away.");
 				}
+				dirty |= Checkbox("Controller: click both sticks (L3 + R3) to open the remote", &s.controller);
+				Tip("A play/pause, B close, X mute, Y power, D-pad left/right previous/next, D-pad up/down volume, LB/RB "
+					"rewind/fast forward, View/Back the Videos list (D-pad + A to play, B to close it), Start the Playlists. "
+					"The left stick walks with the remote on screen; L3 + R3 brings it back.");
 			}
 
 			Separator();
@@ -1420,8 +1545,71 @@ namespace fv::Remote
 		}
 	}
 
+	// the game controller, every frame (also while the remote is closed: L3 + R3 opens it)
+	void PollPad()
+	{
+		static WORD  prev = 0;
+		static DWORD pad = 0;  // the controller in use (0-3)
+		if (!g_window || !Settings::Get().controller) {
+			return;
+		}
+		auto* api = PadApi();
+		if (!api) {
+			return;
+		}
+		DWORD pid = 0;
+		::GetWindowThreadProcessId(::GetForegroundWindow(), &pid);
+		if (pid != ::GetCurrentProcessId()) {
+			prev = 0;
+			return;
+		}
+		XINPUT_STATE st{};
+		if (api(pad, &st) != ERROR_SUCCESS) {
+			static int probe = 0;
+			if (++probe % 60 == 0) {  // look for a controller on the other ports about once a second
+				pad = (pad + 1) % 4;
+			}
+			prev = 0;
+			return;
+		}
+		const WORD cur = st.Gamepad.wButtons;
+		const WORD hit = cur & ~prev;
+		prev = cur;
+
+		constexpr WORD sticks = XINPUT_GAMEPAD_LEFT_THUMB | XINPUT_GAMEPAD_RIGHT_THUMB;
+		if ((cur & sticks) == sticks && (hit & sticks)) {
+			Toggle();  // same as the remote key: open, bring the cursor back, or close
+			return;
+		}
+		if (!g_window->IsOpen.load()) {
+			return;
+		}
+		if (g_window->BlockUserInput.load()) {
+			// moving the left stick walks with the remote on screen, like W/A/S/D
+			const int lx = st.Gamepad.sThumbLX, ly = st.Gamepad.sThumbLY;
+			if (lx * lx + ly * ly > 16000 * 16000) {
+				CursorMode(false);
+				return;
+			}
+			static const std::pair<WORD, Pad> kMap[]{
+				{ XINPUT_GAMEPAD_A, Pad::kA }, { XINPUT_GAMEPAD_B, Pad::kB }, { XINPUT_GAMEPAD_X, Pad::kX }, { XINPUT_GAMEPAD_Y, Pad::kY },
+				{ XINPUT_GAMEPAD_LEFT_SHOULDER, Pad::kLB }, { XINPUT_GAMEPAD_RIGHT_SHOULDER, Pad::kRB },
+				{ XINPUT_GAMEPAD_DPAD_UP, Pad::kUp }, { XINPUT_GAMEPAD_DPAD_DOWN, Pad::kDown },
+				{ XINPUT_GAMEPAD_DPAD_LEFT, Pad::kLeft }, { XINPUT_GAMEPAD_DPAD_RIGHT, Pad::kRight },
+				{ XINPUT_GAMEPAD_BACK, Pad::kBack }, { XINPUT_GAMEPAD_START, Pad::kStart },
+			};
+			std::scoped_lock lock(g_padLock);
+			for (const auto& [bit, b] : kMap) {
+				if (hit & bit) {
+					g_padQueue.push_back(b);
+				}
+			}
+		}
+	}
+
 	void Tick()
 	{
+		PollPad();
 		const bool open = g_window && g_window->IsOpen.load();
 		if (!open) {
 			return;

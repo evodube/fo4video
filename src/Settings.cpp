@@ -118,6 +118,7 @@ namespace fv
 		put(L"General", L"bAimToSelect", b(aimToSelect));
 		put(L"General", L"fAimDistance", f(aimDistance));
 		put(L"General", L"iKeyRemote", i(keyRemote));
+		put(L"General", L"bController", b(controller));
 
 		put(L"Screen", L"iSRGB", i(srgb));
 		put(L"Screen", L"iAspectMode", i(aspectMode));
@@ -198,6 +199,7 @@ namespace fv
 		aimToSelect = ReadBool(L"General", L"bAimToSelect", aimToSelect);
 		aimDistance = std::max(100.0f, ReadFloat(L"General", L"fAimDistance", aimDistance));
 		keyRemote = ReadInt(L"General", L"iKeyRemote", keyRemote);
+		controller = ReadBool(L"General", L"bController", controller);
 
 		const auto names = Narrow(ReadString(L"Screen", L"sScreenNames", L""));
 		if (!names.empty()) {
