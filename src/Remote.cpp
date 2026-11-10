@@ -1707,9 +1707,8 @@ namespace fv::Remote
 			ActivateBinding now;
 			constexpr std::uint32_t none = RE::ControlMap::kInvalid;
 			if (const auto key = map->GetMappedKey("Activate", RE::INPUT_DEVICE::kKeyboard); key != none && key != 0xFF) {
-				// the game stores keyboard keys as scan codes (E = 0x12); 0x80 and up are the extended keys
-				const UINT scan = (key & 0x80) ? (0xE000 | (key & 0x7F)) : key;
-				now.vkKey = static_cast<int>(::MapVirtualKeyW(scan, MAPVK_VSC_TO_VK_EX));
+				// Fallout 4 stores keyboard keys as Windows virtual keys already (F = 0x46)
+				now.vkKey = static_cast<int>(key);
 			} else {
 				now.vkKey = 0;
 			}
@@ -1916,7 +1915,8 @@ namespace fv::Remote
 			return;
 		}
 		if (g_posterWin && g_posterWin->IsOpen.load()) {
-			g_posterWin->IsOpen = false;  // one menu at a time (they share the video list)
+			g_posterWin->IsOpen = false;  // F6 closes the poster menu like it closes the remote
+			return;
 		}
 		log::info("remote: looking for the screen under the crosshair");
 		auto ref = Manager::Get().Target();
@@ -1927,6 +1927,12 @@ namespace fv::Remote
 		std::string what;
 		if (Settings::Get().onlySupportedScreens && !Screen::IsSupported(ref.get(), &what)) {
 			Notify("Real Videos: that isn't a TV, projector or cinema screen");
+			return;
+		}
+		if (Screen::IsVideoPoster(ref.get())) {
+			// posters have their own menu (only the Posters folder's videos), not the remote
+			log::info("remote: {} is a video poster; opening its menu instead", Screen::RefName(ref.get()));
+			OpenPoster(ref.get());
 			return;
 		}
 		log::info("remote: found {}", Screen::RefName(ref.get()));
