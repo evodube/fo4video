@@ -948,6 +948,20 @@ namespace fv
 			}
 		}
 
+		// video posters (Contraptions' powered posters) only play while they have power
+		if (!buildMode) {
+			for (auto& p : _players) {
+				if (p->stopping) {
+					continue;
+				}
+				auto ref = p->ref.get();
+				if (ref && Screen::IsVideoPoster(ref.get()) && !Screen::PosterPowered(ref.get())) {
+					log::info("{}: the poster lost power; stopping", p->name);
+					StopLocked(*p);
+				}
+			}
+		}
+
 		// How lit the world is right now, for the back / frame / pole of glowing projector screens: they glow with
 		// the picture, so they're dimmed to what the game's lighting would give them. Outside: the current weather's
 		// ambient + sunlight/moonlight colours (follows the time of day, storms, dusk...). Inside: the cell's own.

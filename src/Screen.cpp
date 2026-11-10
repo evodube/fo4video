@@ -166,6 +166,23 @@ namespace fv::Screen
 			return lower.starts_with("votwr\\radiationqueen");
 		}
 
+		// The model path of a reference's base object, lower case, without "meshes\\"
+		std::string ModelPath(RE::TESObjectREFR* a_ref)
+		{
+			auto* base = a_ref ? a_ref->GetObjectReference() : nullptr;
+			auto* model = base ? base->As<RE::TESModel>() : nullptr;
+			const char* path = model ? model->GetModel() : nullptr;
+			if (!path) {
+				return {};
+			}
+			auto lower = Lower(path);
+			std::ranges::replace(lower, '/', '\\');
+			if (lower.starts_with("meshes\\")) {
+				lower.erase(0, 7);
+			}
+			return lower;
+		}
+
 		void CollectRef(RE::TESObjectREFR* a_ref, bool a_nearby, std::vector<Candidate>& a_out)
 		{
 			auto* root = a_ref ? a_ref->Get3D() : nullptr;
@@ -285,6 +302,10 @@ namespace fv::Screen
 			const bool  effect = prop && prop->material && prop->material->GetType() == RE::BSShaderMaterial::Type::kEffect;
 
 			int score = 0;
+			// a video poster's face: the poster quad, not the frame (which shares the poster texture on its edges)
+			if (a_c.owner && IsVideoPoster(a_c.owner) && (nameLower.starts_with("poster") || nameLower.starts_with("advertsposter"))) {
+				score += 100;
+			}
 			if (ContainsAny(nameLower, settings.screenNames)) {
 				score += 30;
 			}
@@ -897,6 +918,39 @@ namespace fv::Screen
 		}
 	}
 
+	// Contraptions Workshop's powered (lit) posters: Decorations > Wall Decorations > Posters, the ones that need power
+	bool IsVideoPoster(RE::TESObjectREFR* a_ref)
+	{
+		return a_ref && ModelPath(a_ref).starts_with("dlc05\\setdressing\\workshop\\posterframes\\");
+	}
+
+	// A powered poster shows its "Dark" overlay while it has no power (the A frames); the B frames have no overlay and
+	// count as powered.
+	bool PosterPowered(RE::TESObjectREFR* a_ref)
+	{
+		auto* root = a_ref ? a_ref->Get3D() : nullptr;
+		if (!root) {
+			return false;
+		}
+		RE::NiAVObject* dark = nullptr;
+		std::function<void(RE::NiAVObject*, int)> find = [&](RE::NiAVObject* a_obj, int a_depth) {
+			if (!a_obj || dark || a_depth > 16) {
+				return;
+			}
+			if (_stricmp(Str(a_obj->name).c_str(), "Dark") == 0) {
+				dark = a_obj;
+				return;
+			}
+			if (auto* node = a_obj->IsNode()) {
+				for (auto& child : node->children) {
+					find(child.get(), a_depth + 1);
+				}
+			}
+		};
+		find(root, 0);
+		return !dark || dark->GetAppCulled();
+	}
+
 	bool IsSupported(RE::TESObjectREFR* a_ref, std::string* a_what)
 	{
 		auto set = [&](const char* a_text) {
@@ -912,6 +966,10 @@ namespace fv::Screen
 		if (IsMediaPlayer(a_ref)) {
 			set("Videos of the Wasteland media player (Radiation Queen) - aim at the TV instead");
 			return false;
+		}
+		if (IsVideoPoster(a_ref)) {
+			set("video poster");
+			return true;
 		}
 		const auto rootName = Lower(Str(root->name));
 		const auto key = Lower(ModelKey(a_ref));

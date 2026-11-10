@@ -124,6 +124,10 @@ namespace fv
 		// screens, and the drive-in cinema (screen and projector). a_what gets a short description for the log.
 		bool IsSupported(RE::TESObjectREFR* a_ref, std::string* a_what = nullptr);
 
+		// Contraptions Workshop's powered posters, which play a video picked by activating them (no remote)
+		bool IsVideoPoster(RE::TESObjectREFR* a_ref);
+		bool PosterPowered(RE::TESObjectREFR* a_ref);  // false while the poster has no power
+
 		// The nearest supported screen (see IsSupported) under the crosshair, within a_maxDistance. Main thread.
 		RE::TESObjectREFR* PickAimed(float a_maxDistance);
 		// Every supported screen with its 3D loaded within a_radius of a_center (nearest first). Main thread.

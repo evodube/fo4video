@@ -12,4 +12,7 @@ namespace fv::Remote
 
 	// Render thread, every frame: walk with W/A/S/D while the remote is open (the menu blocks the game's input).
 	void Tick();
+
+	// Main thread: open the small video menu for a video poster (Contraptions' powered posters), activated with E / A
+	void OpenPoster(RE::TESObjectREFR* a_ref);
 }
