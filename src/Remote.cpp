@@ -1428,6 +1428,8 @@ namespace fv::Remote
 			dirty |= Percent("Cinema brightness", &s.bigScreenBrightness, 4.0f, "100% = as is, up to 400%. Only the drive-in screen. Applies right away.");
 			dirty |= Checkbox("Projectors: stretch to fill the screen", &s.projectorStretch);
 			Tip("Off: the video keeps its shape with black bars. Applies when a video starts (or press Apply below).");
+			dirty |= Checkbox("Video posters: stretch to fill the poster", &s.posterStretch);
+			Tip("Off: the video keeps its shape with black bars. Applies when a video starts (or press Apply below).");
 			dirty |= Checkbox("Projectors: draw the video only inside the screen", &s.composite);
 			Tip("Off: the video covers the whole mesh, frame included.");
 			dirty |= Checkbox("Two-sided screens: show on both sides", &s.bothSides);

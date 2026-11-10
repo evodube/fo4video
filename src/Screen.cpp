@@ -1995,7 +1995,11 @@ namespace fv::Screen
 		a_binding.flip = userFlip;
 		a_binding.bigScreen = !a_binding.classic && IsBigScreen(geom);
 		// big screens (the drive-in cinema) fill the whole screen instead of keeping black bars
-		if (settings.bigScreenStretch && a_binding.bigScreen) {
+		if (settings.posterStretch && IsVideoPoster(a_ref)) {
+			a_binding.screenAspect = 0.0f;  // video poster: fill the whole poster, no black bars
+			a_binding.faceAspect[0] = a_binding.faceAspect[1] = 0.0f;
+			log::info("{}: video poster: stretching the video to fill it", RefName(a_ref));
+		} else if (settings.bigScreenStretch && a_binding.bigScreen) {
 			a_binding.screenAspect = 0.0f;
 			a_binding.faceAspect[0] = a_binding.faceAspect[1] = 0.0f;
 			log::info("{}: big screen (size {:.0f}): stretching the video to fill it", RefName(a_ref), geom->worldBound.fRadius);

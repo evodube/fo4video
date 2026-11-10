@@ -97,6 +97,7 @@ namespace fv
 		float bigScreenRadius{ 500.0f };   // screens this big (mesh radius) use the big-screen distances
 		bool  bigScreenStretch{ true };    // big screens: stretch the video to fill them (no black bars)
 		bool  projectorStretch{ false };   // projectors: stretch the video to fill the screen (no black bars)
+		bool  posterStretch{ true };       // video posters: stretch the video to fill the poster (no black bars)
 		Film  cinemaFilm{ 0.25f, 0.25f, 0.2f, 0.35f, 0.3f, 0.15f, 0.2f };
 		Film  projectorFilm{};
 		Film  tvFilm{};  // TVs' own old film look (all 0 = off)

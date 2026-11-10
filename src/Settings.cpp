@@ -124,6 +124,7 @@ namespace fv
 		put(L"Screen", L"iAspectMode", i(aspectMode));
 		put(L"Screen", L"bStretchOnBigScreens", b(bigScreenStretch));
 		put(L"Screen", L"bStretchOnProjectors", b(projectorStretch));
+		put(L"Screen", L"bStretchOnPosters", b(posterStretch));
 		const auto putFilm = [&](const wchar_t* a_section, const Film& a_f) {
 			put(a_section, L"fGrain", f(a_f.grain));
 			put(a_section, L"fScratches", f(a_f.scratches));
@@ -226,6 +227,7 @@ namespace fv
 		bigScreenRadius = ReadFloat(L"Audio", L"fBigScreenSize", bigScreenRadius);
 		bigScreenStretch = ReadBool(L"Screen", L"bStretchOnBigScreens", bigScreenStretch);
 		projectorStretch = ReadBool(L"Screen", L"bStretchOnProjectors", projectorStretch);
+		posterStretch = ReadBool(L"Screen", L"bStretchOnPosters", posterStretch);
 		const auto readFilm = [&](const wchar_t* a_section, Film& a_f) {
 			const auto one = [&](const wchar_t* a_key, float& a_v) { a_v = std::clamp(ReadFloat(a_section, a_key, a_v), 0.0f, 1.0f); };
 			one(L"fGrain", a_f.grain);
