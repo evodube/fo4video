@@ -1372,7 +1372,7 @@ namespace fv
 		if (RefuseUnsupported(ref.get())) {
 			return;
 		}
-		const auto videos = ListVideos();
+		const auto videos = ListVideosFor(ref.get());
 		if (videos.empty()) {
 			Notify(std::format("Real Videos: no videos in {}", Narrow(Settings::Get().videoFolder)));
 			return;
@@ -1461,12 +1461,31 @@ namespace fv
 		RemoteStep(a_ref, 0);  // off: switch on with the current video
 	}
 
+	bool Manager::IsPosterVideo(const std::wstring& a_relative)
+	{
+		for (const auto& part : std::filesystem::path(a_relative).parent_path()) {
+			if (_wcsicmp(part.c_str(), L"Posters") == 0) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	std::vector<std::wstring> Manager::ListVideosFor(RE::TESObjectREFR* a_ref) const
+	{
+		// posters only get the Posters folder's videos, every other screen never does
+		auto       videos = ListVideos();
+		const bool poster = a_ref && Screen::IsVideoPoster(a_ref);
+		std::erase_if(videos, [&](const std::wstring& a_v) { return IsPosterVideo(a_v) != poster; });
+		return videos;
+	}
+
 	void Manager::RemoteStep(RE::TESObjectREFR* a_ref, int a_dir)
 	{
 		if (!a_ref || RefuseUnsupported(a_ref)) {
 			return;
 		}
-		auto videos = ListVideos();
+		auto videos = ListVideosFor(a_ref);
 		if (videos.empty()) {
 			Notify(std::format("Real Videos: no videos in {}", Narrow(Settings::Get().videoFolder)));
 			return;
@@ -1491,7 +1510,7 @@ namespace fv
 				videos = std::move(kept);
 				inFolder(L"");
 				if (videos.empty()) {
-					videos = ListVideos();
+					videos = ListVideosFor(a_ref);
 				}
 			}
 		}
@@ -1563,7 +1582,7 @@ namespace fv
 		if (!a_ref || RefuseUnsupported(a_ref)) {
 			return;
 		}
-		auto videos = ListVideos();
+		auto videos = ListVideosFor(a_ref);
 		if (videos.empty()) {
 			Notify(std::format("Real Videos: no videos in {}", Narrow(Settings::Get().videoFolder)));
 			return;
@@ -1688,7 +1707,7 @@ namespace fv
 			}
 		}
 		if (file.empty()) {
-			const auto videos = ListVideos();
+			const auto videos = ListVideosFor(nullptr);
 			if (videos.empty()) {
 				Notify(std::format("Real Videos: no videos in {}", Narrow(settings.videoFolder)));
 				return;

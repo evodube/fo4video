@@ -168,7 +168,12 @@ namespace fv
 
 		// Resolves a Papyrus/INI file name to a full path under the video folder.
 		std::wstring ResolveVideoPath(const std::wstring& a_name) const;
-		std::vector<std::wstring> ListVideos() const;  // relative to the video folder, subfolders included
+		std::vector<std::wstring> ListVideos() const;
+		// a video in a folder named "Posters" (anywhere in the video folder): only for video posters, which show
+		// nothing else; TVs, projectors and the cinema don't list them
+		static bool IsPosterVideo(const std::wstring& a_relative);
+		// the videos this screen may play (posters: Posters folders only; other screens: everything else)
+		std::vector<std::wstring> ListVideosFor(RE::TESObjectREFR* a_ref) const;  // relative to the video folder, subfolders included
 		std::wstring CurrentVideo(RE::TESObjectREFR* a_ref);  // what that screen plays, relative to the video folder
 
 		// Hotkey actions (main thread)

@@ -1848,6 +1848,13 @@ namespace fv::Screen
 				shape.faceOrient[1] = 3;
 				log::info("{}: controlled ceiling projector screen: turned 180 degrees", RefName(a_ref));
 			}
+			// video posters: the poster texture is a tile of a sheet whose shape made the automatic check think the
+			// picture lies on its side (it turned one poster model each way); their UVs are upright as they are
+			if (IsVideoPoster(a_ref)) {
+				shape.flipHint = 0;
+				shape.faceOrient[0] = 0;
+				shape.faceOrient[1] = 0;
+			}
 			flip = (userFlip ^ shape.flipHint) & 7;
 			const auto inTexture = [](const std::array<float, 4>& r) { return r[0] >= -0.01f && r[1] >= -0.01f && r[2] <= 1.01f && r[3] <= 1.01f; };
 			const std::array<float, 4> whole{ shape.all.u0, shape.all.v0, shape.all.u1, shape.all.v1 };

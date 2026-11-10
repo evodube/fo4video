@@ -93,9 +93,11 @@ namespace fv::Remote
 			});
 		}
 
-		void RefreshVideoList()
+		// a_posters: the video poster menu (only videos in a "Posters" folder); otherwise the remote (everything else)
+		void RefreshVideoList(bool a_posters = false)
 		{
 			auto files = Manager::Get().ListVideos();
+			std::erase_if(files, [&](const std::wstring& a_f) { return Manager::IsPosterVideo(a_f) != a_posters; });
 			std::vector<std::string> names, folders;
 			names.reserve(files.size());
 			for (const auto& f : files) {
@@ -1066,7 +1068,8 @@ namespace fv::Remote
 				if (BeginChild("##RealVideosPosterList", ImVec2{ 0.0f, 0.0f }, 0, 0)) {
 					SetWindowFontScale(g_panelFont);
 					if (g_videoNames.empty()) {
-						TextWrapped("No videos yet. Put videos in Data\\Videos.");
+						TextWrapped("No poster videos yet. Put them in a folder called Posters in your video folder, e.g. "
+									"Data\\Videos\\Posters (portrait 9:16 videos fit best). Folders inside it work too.");
 					}
 					int row = 0;
 					for (std::size_t i = 0; i < g_videoNames.size(); ++i) {
@@ -1665,7 +1668,10 @@ namespace fv::Remote
 			Notify("Real Videos: this poster needs power");
 			return;
 		}
-		RefreshVideoList();
+		if (g_window && g_window->IsOpen.load()) {
+			g_window->IsOpen = false;  // one menu at a time (they share the video list)
+		}
+		RefreshVideoList(true);
 		g_posterTarget = a_ref->GetFormID();
 		g_posterSearch[0] = '\0';
 		g_posterRow = 0;
@@ -1908,6 +1914,9 @@ namespace fv::Remote
 				log::info("remote: closed");
 			}
 			return;
+		}
+		if (g_posterWin && g_posterWin->IsOpen.load()) {
+			g_posterWin->IsOpen = false;  // one menu at a time (they share the video list)
 		}
 		log::info("remote: looking for the screen under the crosshair");
 		auto ref = Manager::Get().Target();
