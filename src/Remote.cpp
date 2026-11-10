@@ -1677,7 +1677,51 @@ namespace fv::Remote
 
 	namespace
 	{
-		// E (or the controller's A) on a video poster, outside menus: open its video menu. The game itself does
+		// The game's own Activate binding (Settings > Controls), so the poster opens with whatever key the player
+		// interacts with: keyboard key, mouse button and controller button. Re-read about once a second.
+		struct ActivateBinding
+		{
+			int  vkKey{ 'E' };     // keyboard (as a Windows virtual key), 0 = none
+			int  vkMouse{ 0 };     // mouse button (as a Windows virtual key), 0 = none
+			WORD pad{ XINPUT_GAMEPAD_A };
+		};
+
+		const ActivateBinding& ActivateKeys()
+		{
+			static ActivateBinding keys;
+			static int             frames = 0;
+			if (frames-- > 0) {
+				return keys;
+			}
+			frames = 60;
+			auto* map = RE::ControlMap::GetSingleton();
+			if (!map) {
+				return keys;
+			}
+			ActivateBinding now;
+			constexpr std::uint32_t none = RE::ControlMap::kInvalid;
+			if (const auto key = map->GetMappedKey("Activate", RE::INPUT_DEVICE::kKeyboard); key != none && key != 0xFF) {
+				// the game stores keyboard keys as scan codes (E = 0x12); 0x80 and up are the extended keys
+				const UINT scan = (key & 0x80) ? (0xE000 | (key & 0x7F)) : key;
+				now.vkKey = static_cast<int>(::MapVirtualKeyW(scan, MAPVK_VSC_TO_VK_EX));
+			} else {
+				now.vkKey = 0;
+			}
+			if (const auto btn = map->GetMappedKey("Activate", RE::INPUT_DEVICE::kMouse); btn != none && btn != 0xFF) {
+				static constexpr int kMouse[]{ VK_LBUTTON, VK_RBUTTON, VK_MBUTTON, VK_XBUTTON1, VK_XBUTTON2 };
+				now.vkMouse = btn < std::size(kMouse) ? kMouse[btn] : 0;
+			}
+			if (const auto btn = map->GetMappedKey("Activate", RE::INPUT_DEVICE::kGamepad); btn != none && btn != 0xFF) {
+				now.pad = static_cast<WORD>(btn);  // the game uses XInput's button bits
+			}
+			if (now.vkKey != keys.vkKey || now.vkMouse != keys.vkMouse || now.pad != keys.pad) {
+				log::info("video posters: Activate is key 0x{:02X}, mouse 0x{:02X}, controller 0x{:04X}", now.vkKey, now.vkMouse, now.pad);
+			}
+			keys = now;
+			return keys;
+		}
+
+		// The game's Activate key (or controller button) on a video poster, outside menus: open its video menu. The game itself does
 		// nothing when activating these posters, so this doesn't take anything away from it.
 		void CheckPosterActivate(bool a_pressed)
 		{
@@ -1746,7 +1790,7 @@ namespace fv::Remote
 			return;
 		}
 		if (!g_window->IsOpen.load()) {
-			CheckPosterActivate((hit & XINPUT_GAMEPAD_A) != 0);
+			CheckPosterActivate((hit & ActivateKeys().pad) != 0);
 			return;
 		}
 		if (g_window->BlockUserInput.load()) {
@@ -1776,13 +1820,15 @@ namespace fv::Remote
 	{
 		PollPad();
 		{
-			// E on a video poster (only when the game window is in front)
-			static bool eWas = false;
+			// the game's Activate key / mouse button on a video poster (only when the game window is in front)
+			static bool wasDown = false;
 			DWORD       fg = 0;
 			::GetWindowThreadProcessId(::GetForegroundWindow(), &fg);
-			const bool e = fg == ::GetCurrentProcessId() && (::GetAsyncKeyState('E') & 0x8000) != 0;
-			CheckPosterActivate(e && !eWas);
-			eWas = e;
+			const auto& keys = ActivateKeys();
+			const auto  isDown = [](int a_vk) { return a_vk > 0 && (::GetAsyncKeyState(a_vk) & 0x8000) != 0; };
+			const bool  down = fg == ::GetCurrentProcessId() && (isDown(keys.vkKey) || isDown(keys.vkMouse));
+			CheckPosterActivate(down && !wasDown);
+			wasDown = down;
 		}
 		const bool open = g_window && g_window->IsOpen.load();
 		if (!open) {
