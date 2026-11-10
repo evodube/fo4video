@@ -30,7 +30,6 @@ namespace fv::Remote
 		bool                      g_listPosters = false;  // the lists above are a video poster's (Posters folder)
 		std::vector<std::string>  g_videoNames;
 		std::vector<std::string>  g_videoFolders;  // each video's folder ("" = the video folder itself)
-		char                      g_search[96]{};  // the Videos panel's search box
 		std::vector<std::string>  g_openPlaylists;  // playlists unfolded in the Playlists panel
 		std::atomic<bool>         g_typing{ false };  // search box has the keyboard: W/A/S/D are letters, not walking
 
@@ -312,7 +311,7 @@ namespace fv::Remote
 
 		// ---- video posters: a small menu instead of the remote ----
 
-		bool   g_listOpen = false;       // the Videos (search) panel, left of the remote
+		bool   g_listOpen = false;       // the Videos panel, left of the remote
 		bool   g_playlistsOpen = false;  // the Playlists panel, right of the remote
 		bool   g_scrollToCurrent = false;
 		ImVec4 g_remoteRect{};           // where the remote was drawn this frame (x, y, w, h)
@@ -673,7 +672,7 @@ namespace fv::Remote
 			case Key::kCenter: return "MUTE";
 			case Key::kPower: return "POWER";
 			case Key::kHome: return "HOME";
-			case Key::kSearch: return "SEARCH";
+			case Key::kSearch: return "VIDEOS";
 			case Key::kName: return "NAME BAR";
 			case Key::kClose: return "CLOSE";
 			case Key::kLock: return "LOCK";
@@ -757,7 +756,7 @@ namespace fv::Remote
 		}
 
 
-		// ---- the side panels: Videos (search, left of the remote) and Playlists (right of it) ----
+		// ---- the side panels: Videos (left of the remote) and Playlists (right of it) ----
 
 		std::string LowerAscii(std::string a_s)
 		{
@@ -884,17 +883,16 @@ namespace fv::Remote
 				Post(a_target, [file = g_videoFiles[a_i]](RE::TESObjectREFR* a_ref) { Manager::Get().RemotePlayFile(a_ref, file); });
 			};
 
-			// Videos: search bar on top, matching videos below (videos only, never folders)
+			// Videos: only the loose videos (straight in Videos, or Videos\\Posters for a poster); playlists have their own panel
 			g_typing = false;
 			if (g_listOpen) {
 				if (PanelBegin("##RealVideosVideos", "Videos", ImVec2{ g_remoteRect.x - panelW - gap, g_remoteRect.y }, size, g_listOpen, a_scale)) {
-					SetNextItemWidth(-1.0f);
-					InputTextWithHint("##RealVideosSearch", "Search videos...", g_search, sizeof(g_search));
-					g_typing = IsItemActive();
-					const auto query = LowerAscii(g_search);
+					const auto loose = [](std::size_t a_i) {
+						return g_videoFolders[a_i].empty() || _stricmp(g_videoFolders[a_i].c_str(), "Posters") == 0;
+					};
 					std::size_t found = 0;
 					for (std::size_t i = 0; i < g_videoNames.size(); ++i) {
-						found += query.empty() || LowerAscii(g_videoNames[i]).find(query) != std::string::npos;
+						found += loose(i);
 					}
 					TextDisabled("%zu video%s", found, found == 1 ? "" : "s");
 					if (g_padRow >= static_cast<int>(found)) {
@@ -907,8 +905,12 @@ namespace fv::Remote
 					std::size_t row = 0;
 					if (BeginChild("##RealVideosResults", ImVec2{ 0.0f, 0.0f }, 0, 0)) {
 						SetWindowFontScale(g_panelFont);
+						if (found == 0) {
+							TextWrapped(g_listPosters ? "No videos in Data\\Videos\\Posters. Poster playlists are in the Playlists tab." :
+														"No videos in Data\\Videos. Playlists are in the Playlists tab.");
+						}
 						for (std::size_t i = 0; i < g_videoNames.size(); ++i) {
-							if (!query.empty() && LowerAscii(g_videoNames[i]).find(query) == std::string::npos) {
+							if (!loose(i)) {
 								continue;
 							}
 							PushID(static_cast<int>(i));
@@ -923,10 +925,6 @@ namespace fv::Remote
 								g_padScroll = false;
 							}
 							++row;
-							if (const auto pl = PlaylistOf(g_videoFolders[i]); !pl.empty()) {
-								SameLine();
-								TextDisabled("%s", pl.c_str());
-							}
 							if (current && g_scrollToCurrent) {
 								SetScrollHereY(0.5f);
 								g_scrollToCurrent = false;
