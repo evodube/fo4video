@@ -20,6 +20,13 @@ own list:
       01 Intro.mp4, 02 Part One.mp4, 03 Part Two.mp4 ...
 
 
+WHEN A VIDEO ENDS
+-----------------
+  - A video straight in Data\Videos (or Data\Videos\Posters) starts again.
+  - A video in a playlist moves on to the next video in that playlist (after
+    the last one, the first again), or a random one with Shuffle on.
+
+
 PLAYLISTS
 ---------
 Any folder inside Data\Videos\Playlists shows up as a playlist on the remote.
@@ -48,8 +55,8 @@ stay inside the exact folder the video is in.
 
 SHUFFLE
 -------
-Turn on "Shuffle" on the remote's Settings page (or bShuffle=1 in
-RealVideos.ini) to play videos in random order.
+Turn on "Shuffle playlists" on the remote's Settings page (or bShuffle=1 in
+RealVideos.ini) to play playlists in random order.
 
   - Shuffle only picks from the folder the screen is playing from. Folders
     never mix, so a Cartoons screen stays on cartoons.

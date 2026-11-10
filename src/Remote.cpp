@@ -1220,13 +1220,8 @@ namespace fv::Remote
 			static bool dirty = false;
 
 			SeparatorText("Playback");
-			if (Checkbox("Loop videos", &s.loop)) {
-				dirty = true;
-				OnMain([loop = s.loop]() { Manager::Get().SetLoopAll(loop); });  // the screens playing now too
-			}
-			Tip("On: a video starts again when it ends. Off: the next video in its folder plays (after the last one, the "
-				"first again).");
-			dirty |= Checkbox("Shuffle: play videos in random order", &s.shuffle);
+			TextDisabled("Videos in Videos or Videos\\Posters repeat; playlists play on to the next video.");
+			dirty |= Checkbox("Shuffle playlists: play them in random order", &s.shuffle);
 			Tip("Random videos, but only from the folder (playlist) the screen is playing from - folders never mix. Next and "
 				"turning a screen on pick a random one, a video that ends moves on to another, and previous goes back to the "
 				"one played before.");

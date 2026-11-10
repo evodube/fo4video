@@ -810,6 +810,20 @@ namespace fv
 	}
 
 	// a video in Data\Videos\Playlists\Autoplay or Data\Videos\Posters\Playlists\Autoplay (or a folder inside it)
+	// a video in a playlist: Videos\Playlists\<name>\... or the posters' Videos\Posters\Playlists\<name>\...
+	bool Manager::InPlaylist(const std::wstring& a_file)
+	{
+		std::error_code ec;
+		const auto      root = std::filesystem::absolute(std::filesystem::path(Settings::Get().videoFolder), ec);
+		const auto      rel = std::filesystem::path(a_file).lexically_relative(root);
+		std::vector<std::wstring> parts;
+		for (const auto& part : rel) {
+			parts.push_back(part.wstring());
+		}
+		const std::size_t i = parts.size() >= 4 && _wcsicmp(parts[0].c_str(), L"Posters") == 0 ? 1 : 0;
+		return parts.size() >= i + 3 && _wcsicmp(parts[i].c_str(), L"Playlists") == 0;
+	}
+
 	bool Manager::IsAutoplay(const std::wstring& a_file) const
 	{
 		std::error_code ec;
@@ -2138,9 +2152,11 @@ namespace fv
 				p.media->SetVolume(p.volume);
 				p.media->SetPan(p.pan.load());
 				if (!held && !frozen && p.media->Finished()) {
-					// a video that ended moves on to the next one in its folder (shuffle: a random one) unless it loops;
-					// with shuffle on it always moves on
-					if (p.kind == SourceKind::kVideo && (settings.shuffle || !p.loop)) {
+					// a video in a playlist moves on to the next one in that playlist (shuffle: a random one); a video
+					// straight in Videos or Videos\Posters (or any other folder) starts again
+					if (p.kind == SourceKind::kVideo && !p.advancePending && !InPlaylist(p.file)) {
+						p.media->Restart();
+					} else if (p.kind == SourceKind::kVideo) {
 						if (!p.advancePending) {
 							p.advancePending = true;
 							if (auto* tasks = F4SE::GetTaskInterface()) {
