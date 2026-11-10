@@ -309,13 +309,6 @@ namespace fv::Remote
 		}
 
 		// ---- video posters: a small menu instead of the remote ----
-		F4SEMenuFramework::Model::WindowInterface* g_posterWin = nullptr;
-		std::atomic<std::uint32_t>                 g_posterTarget{ 0 };
-		std::string                                g_posterName;
-		char                                       g_posterSearch[128]{};
-		int                                        g_posterRow = 0;      // highlighted row (controller)
-		bool                                       g_posterScroll = false;
-		bool                                       g_posterPick = false; // play the highlighted row
 
 		bool   g_listOpen = false;       // the Videos (search) panel, left of the remote
 		bool   g_playlistsOpen = false;  // the Playlists panel, right of the remote
@@ -1005,105 +998,6 @@ namespace fv::Remote
 			}
 		}
 
-		// The video poster menu: pick a video (search box, playlist name next to each), stop, volume. Picking plays it on
-		// the poster and closes the menu. Mouse, keyboard (Esc closes) or controller (D-pad, A plays, B closes).
-		void __stdcall RenderPosterWindow()
-		{
-			const auto target = g_posterTarget.load();
-			const auto view = Manager::Get().View(target);
-			// controller: D-pad moves, A plays, B closes
-			{
-				std::vector<Pad> pressed;
-				{
-					std::scoped_lock lock(g_padLock);
-					pressed.swap(g_padQueue);
-				}
-				for (const auto b : pressed) {
-					if (b == Pad::kUp) {
-						g_posterRow = std::max(0, g_posterRow - 1);
-						g_posterScroll = true;
-					} else if (b == Pad::kDown) {
-						++g_posterRow;
-						g_posterScroll = true;
-					} else if (b == Pad::kA) {
-						g_posterPick = true;
-					} else if (b == Pad::kB) {
-						g_posterWin->IsOpen = false;
-						return;
-					}
-				}
-			}
-			auto*      viewport = GetMainViewport();
-			const float scale = std::max(1.0f, viewport->Size.y / 1080.0f);
-			const ImVec2 size{ 520.0f * scale, 620.0f * scale };
-			SetNextWindowPos(ImVec2{ viewport->Pos.x + (viewport->Size.x - size.x) * 0.5f, viewport->Pos.y + (viewport->Size.y - size.y) * 0.5f },
-				ImGuiCond_Always, ImVec2{ 0.0f, 0.0f });
-			bool open = true;
-			if (PanelBegin("##RealVideosPoster", "Video poster", ImVec2{ viewport->Pos.x + (viewport->Size.x - size.x) * 0.5f,
-																	viewport->Pos.y + (viewport->Size.y - size.y) * 0.5f },
-					size, open, scale * 0.45f)) {
-				if (view.playing) {
-					TextDisabled("Playing: %s", view.file.c_str());
-					if (Button("Stop")) {
-						Post(target, [](RE::TESObjectREFR* a_ref) { Manager::Get().RemotePower(a_ref); });
-					}
-					SameLine();
-					float vol = view.volume * 100.0f;
-					SetNextItemWidth(-1.0f);
-					if (SliderFloat("##RealVideosPosterVol", &vol, 0.0f, 200.0f, "Volume %.0f%%", 0)) {
-						OnMain([id = target, x = vol / 100.0f]() { Manager::Get().RemoteSetVolume(id, x); });
-					}
-				}
-				SetNextItemWidth(-1.0f);
-				if (InputTextWithHint("##RealVideosPosterSearch", "Search videos...", g_posterSearch, sizeof(g_posterSearch))) {
-					g_posterRow = 0;
-				}
-				const auto query = LowerAscii(g_posterSearch);
-				std::scoped_lock lock(g_lock);
-				std::size_t found = 0;
-				for (std::size_t i = 0; i < g_videoNames.size(); ++i) {
-					found += query.empty() || LowerAscii(g_videoNames[i]).find(query) != std::string::npos;
-				}
-				g_posterRow = std::clamp(g_posterRow, 0, std::max(0, static_cast<int>(found) - 1));
-				if (BeginChild("##RealVideosPosterList", ImVec2{ 0.0f, 0.0f }, 0, 0)) {
-					SetWindowFontScale(g_panelFont);
-					if (g_videoNames.empty()) {
-						TextWrapped("No poster videos yet. Put them in a folder called Posters in your video folder, e.g. "
-									"Data\\Videos\\Posters (portrait 9:16 videos fit best). Folders inside it work too.");
-					}
-					int row = 0;
-					for (std::size_t i = 0; i < g_videoNames.size(); ++i) {
-						if (!query.empty() && LowerAscii(g_videoNames[i]).find(query) == std::string::npos) {
-							continue;
-						}
-						PushID(static_cast<int>(i));
-						const bool sel = row == g_posterRow;
-						if (PanelRow(g_videoNames[i].c_str(), sel) || (sel && g_posterPick)) {
-							g_posterPick = false;
-							Post(target, [file = g_videoFiles[i]](RE::TESObjectREFR* a_ref) { Manager::Get().RemotePlayFile(a_ref, file); });
-							g_posterWin->IsOpen = false;
-						}
-						if (sel && g_posterScroll) {
-							SetScrollHereY(0.5f);
-							g_posterScroll = false;
-						}
-						if (const auto pl = PlaylistOf(g_videoFolders[i]); !pl.empty()) {
-							SameLine();
-							TextDisabled("%s", pl.c_str());
-						}
-						PopID();
-						++row;
-					}
-					g_posterPick = false;
-				}
-				EndChild();
-			}
-			PanelEnd();
-			if (!open || IsKeyPressed(ImGuiKey_Escape, false)) {
-				g_posterWin->IsOpen = false;
-			}
-		}
-
 		// controller buttons queued by PollPad: with the Videos list open the D-pad and A / B work the list,
 		// otherwise every button is a remote key
 		void HandlePad(std::uint32_t a_target, const RemoteView& a_view)
@@ -1657,32 +1551,6 @@ namespace fv::Remote
 		}
 	}
 
-	void OpenPoster(RE::TESObjectREFR* a_ref)
-	{
-		if (!g_posterWin) {
-			Register("video poster");
-		}
-		if (!g_posterWin) {
-			Notify("Real Videos: video posters need F4SE Menu Framework");
-			return;
-		}
-		if (!Screen::PosterPowered(a_ref)) {
-			Notify("Real Videos: this poster needs power");
-			return;
-		}
-		if (g_window && g_window->IsOpen.load()) {
-			g_window->IsOpen = false;  // one menu at a time (they share the video list)
-		}
-		RefreshVideoList(true);
-		g_posterTarget = a_ref->GetFormID();
-		g_posterSearch[0] = '\0';
-		g_posterRow = 0;
-		g_posterScroll = true;
-		g_posterWin->BlockUserInput = true;
-		g_posterWin->IsOpen = true;
-		log::info("video poster: menu opened for {}", Screen::RefName(a_ref));
-	}
-
 	// the game controller, every frame (also while the remote is closed: L3 + R3 opens it)
 	void PollPad()
 	{
@@ -1717,16 +1585,6 @@ namespace fv::Remote
 		constexpr WORD sticks = XINPUT_GAMEPAD_LEFT_THUMB | XINPUT_GAMEPAD_RIGHT_THUMB;
 		if ((cur & sticks) == sticks && (hit & sticks)) {
 			Toggle();  // same as the remote key: open, bring the cursor back, or close
-			return;
-		}
-		if (g_posterWin && g_posterWin->IsOpen.load()) {
-			std::scoped_lock lock(g_padLock);
-			for (const auto& [bit, b] : std::initializer_list<std::pair<WORD, Pad>>{ { XINPUT_GAMEPAD_A, Pad::kA }, { XINPUT_GAMEPAD_B, Pad::kB },
-					 { XINPUT_GAMEPAD_DPAD_UP, Pad::kUp }, { XINPUT_GAMEPAD_DPAD_DOWN, Pad::kDown } }) {
-				if (hit & bit) {
-					g_padQueue.push_back(b);
-				}
-			}
 			return;
 		}
 		if (!g_window->IsOpen.load()) {
@@ -1811,9 +1669,6 @@ namespace fv::Remote
 		if (!g_window) {
 			g_window = F4SEMenuFramework::AddWindow(RenderWindow, true);
 		}
-		if (!g_posterWin) {
-			g_posterWin = F4SEMenuFramework::AddWindow(RenderPosterWindow, true);
-		}
 		log::info("remote ({}): registered with F4SE Menu Framework{}", a_when, g_window ? "" : " (window could not be created)");
 	}
 
@@ -1837,10 +1692,6 @@ namespace fv::Remote
 			}
 			return;
 		}
-		if (g_posterWin && g_posterWin->IsOpen.load()) {
-			g_posterWin->IsOpen = false;  // F6 closes the poster menu like it closes the remote
-			return;
-		}
 		log::info("remote: looking for the screen under the crosshair");
 		auto ref = Manager::Get().Target();
 		if (!ref) {
@@ -1852,14 +1703,14 @@ namespace fv::Remote
 			Notify("Real Videos: that isn't a TV, projector or cinema screen");
 			return;
 		}
-		if (Screen::IsVideoPoster(ref.get())) {
-			// posters have their own menu (only the Posters folder's videos), not the remote
-			log::info("remote: {} is a video poster; opening its menu instead", Screen::RefName(ref.get()));
-			OpenPoster(ref.get());
+		// video posters use the remote too, but only see the Posters folder's videos (and other screens never do)
+		const bool poster = Screen::IsVideoPoster(ref.get());
+		if (poster && !Screen::PosterPowered(ref.get())) {
+			Notify("Real Videos: this poster needs power");
 			return;
 		}
-		log::info("remote: found {}", Screen::RefName(ref.get()));
-		RefreshVideoList();
+		log::info("remote: found {}{}", Screen::RefName(ref.get()), poster ? " (video poster)" : "");
+		RefreshVideoList(poster);
 		{
 			std::scoped_lock lock(g_lock);
 			g_targetName = Screen::RefName(ref.get());
