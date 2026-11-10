@@ -78,6 +78,22 @@ Autoplay folder, from the beginning.
   - If a folder has only one video, it starts again from the beginning.
 
 
+VIDEO POSTERS
+-------------
+The Contraptions Workshop powered posters have their own videos, kept apart
+from everything else. Aim at a powered poster and press F6.
+
+  Data\Videos\
+      Posters\              videos for posters (portrait 9:16 fits best)
+          Playlists\
+              Ads\          a poster playlist
+              Autoplay\     the posters' own Autoplay playlist
+
+Posters only list Data\Videos\Posters and its Playlists. TVs, projectors and
+the cinema never list anything in Posters, and keep using Data\Videos and
+Data\Videos\Playlists.
+
+
 QUICK SETUP
 -----------
   1. Make the folders: Data\Videos\Playlists\<any name>

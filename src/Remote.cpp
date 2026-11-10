@@ -27,6 +27,7 @@ namespace fv::Remote
 		std::mutex               g_lock;  // guards the strings below (written on the main thread, read when drawing)
 		std::string              g_targetName;
 		std::vector<std::wstring> g_videoFiles;
+		bool                      g_listPosters = false;  // the lists above are a video poster's (Posters folder)
 		std::vector<std::string>  g_videoNames;
 		std::vector<std::string>  g_videoFolders;  // each video's folder ("" = the video folder itself)
 		char                      g_search[96]{};  // the Videos panel's search box
@@ -105,6 +106,7 @@ namespace fv::Remote
 				folders.push_back(Narrow(std::filesystem::path(f).parent_path().wstring()));
 			}
 			std::scoped_lock lock(g_lock);
+			g_listPosters = a_posters;
 			g_videoFiles = std::move(files);
 			g_videoNames = std::move(names);
 			g_videoFolders = std::move(folders);
@@ -765,16 +767,18 @@ namespace fv::Remote
 			return a_s;
 		}
 
-		// "Playlists\\Horror\\..." -> "Horror"; anything else -> ""
+		// "Playlists\\Horror\\..." (TVs, projectors, cinema) or "Posters\\Playlists\\Horror\\..." (video posters)
+		// -> "Horror"; anything else -> ""
 		std::string PlaylistOf(const std::string& a_folder)
 		{
-			constexpr std::string_view kRoot = "playlists\\";
-			const auto                lower = LowerAscii(a_folder);
-			if (lower.size() <= kRoot.size() || lower.compare(0, kRoot.size(), kRoot) != 0) {
-				return {};
+			const auto lower = LowerAscii(a_folder);
+			for (const std::string_view root : { std::string_view{ "playlists\\" }, std::string_view{ "posters\\playlists\\" } }) {
+				if (lower.size() > root.size() && lower.compare(0, root.size(), root) == 0) {
+					const auto rest = a_folder.substr(root.size());
+					return rest.substr(0, rest.find('\\'));
+				}
 			}
-			const auto rest = a_folder.substr(kRoot.size());
-			return rest.substr(0, rest.find('\\'));
+			return {};
 		}
 
 		// The side panels wear the remote's look: same dark body and corner rounding, keys coloured like the
@@ -948,8 +952,11 @@ namespace fv::Remote
 					if (BeginChild("##RealVideosPlaylistList", ImVec2{ 0.0f, 0.0f }, 0, 0)) {
 						SetWindowFontScale(g_panelFont);
 						if (names.empty()) {
-							TextWrapped("No playlists yet. Make folders in your video folder's Playlists folder, e.g. "
-										"Data\\Videos\\Playlists\\Horror, and put videos in them.");
+							TextWrapped(g_listPosters ?
+											"No poster playlists yet. Make folders in Data\\Videos\\Posters\\Playlists, e.g. "
+											"Data\\Videos\\Posters\\Playlists\\Ads, and put videos in them." :
+											"No playlists yet. Make folders in your video folder's Playlists folder, e.g. "
+											"Data\\Videos\\Playlists\\Horror, and put videos in them.");
 						}
 						const auto playing = PlaylistOf(a_view.folder);
 						for (std::size_t n = 0; n < names.size(); ++n) {

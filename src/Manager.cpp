@@ -809,7 +809,7 @@ namespace fv
 		});
 	}
 
-	// a video in Data\Videos\Playlists\Autoplay (or a folder inside it)
+	// a video in Data\Videos\Playlists\Autoplay or Data\Videos\Posters\Playlists\Autoplay (or a folder inside it)
 	bool Manager::IsAutoplay(const std::wstring& a_file) const
 	{
 		std::error_code ec;
@@ -819,7 +819,9 @@ namespace fv
 		for (const auto& part : rel) {
 			parts.push_back(part.wstring());
 		}
-		return parts.size() >= 3 && _wcsicmp(parts[0].c_str(), L"Playlists") == 0 && _wcsicmp(parts[1].c_str(), L"Autoplay") == 0;
+		// Playlists\Autoplay, or the posters' own Posters\Playlists\Autoplay
+		std::size_t i = parts.size() >= 4 && _wcsicmp(parts[0].c_str(), L"Posters") == 0 ? 1 : 0;
+		return parts.size() >= i + 3 && _wcsicmp(parts[i].c_str(), L"Playlists") == 0 && _wcsicmp(parts[i + 1].c_str(), L"Autoplay") == 0;
 	}
 
 	// a random other video from the same Autoplay folder as a_file (the same one if it's the only one); full path
@@ -1463,12 +1465,10 @@ namespace fv
 
 	bool Manager::IsPosterVideo(const std::wstring& a_relative)
 	{
-		for (const auto& part : std::filesystem::path(a_relative).parent_path()) {
-			if (_wcsicmp(part.c_str(), L"Posters") == 0) {
-				return true;
-			}
-		}
-		return false;
+		// only the top-level Posters folder (Data\Videos\Posters, with its own Posters\Playlists); a playlist
+		// that happens to be called Posters (Data\Videos\Playlists\Posters) is an ordinary playlist
+		const auto folder = std::filesystem::path(a_relative).parent_path();
+		return !folder.empty() && _wcsicmp(folder.begin()->c_str(), L"Posters") == 0;
 	}
 
 	std::vector<std::wstring> Manager::ListVideosFor(RE::TESObjectREFR* a_ref) const
