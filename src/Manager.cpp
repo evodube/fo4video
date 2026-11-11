@@ -1135,7 +1135,7 @@ namespace fv
 				const auto  v = c - camPos;
 				const float d = v.Length();
 				bool        inView = true;
-				if (haveCam && d > r) {
+				if (settings.freezeOutOfView && haveCam && d > r) {
 					// inside a generous cone around where you look (wider than the screen's field of view), going by
 					// where the character faces or where the camera points
 					const float limit = 1.5708f + std::asin(std::min(1.0f, r / d));  // 90 degrees (anything not behind) + the screen's size

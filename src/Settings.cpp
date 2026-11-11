@@ -99,6 +99,7 @@ namespace fv
 		put(L"General", L"fAutoOffDistance", f(autoOffDistance));
 		put(L"General", L"fAutoOffSeconds", f(autoOffSeconds));
 		put(L"General", L"bFreezePicture", b(freeze));
+		put(L"General", L"bFreezeOutOfView", b(freezeOutOfView));
 		put(L"Audio", L"bDirectionalSound", b(directionalSound));
 		put(L"General", L"bShowMessages", b(showMessages));
 		put(L"General", L"fAllScreensRadius", f(allRadius));
@@ -181,6 +182,7 @@ namespace fv
 		autoOffDistance = std::max(0.0f, ReadFloat(L"General", L"fAutoOffDistance", autoOffDistance));
 		autoOffSeconds = std::clamp(ReadFloat(L"General", L"fAutoOffSeconds", autoOffSeconds), 0.0f, 3600.0f);
 		freeze = ReadBool(L"General", L"bFreezePicture", freeze);
+		freezeOutOfView = ReadBool(L"General", L"bFreezeOutOfView", freezeOutOfView);
 		directionalSound = ReadBool(L"Audio", L"bDirectionalSound", directionalSound);
 		showMessages = ReadBool(L"General", L"bShowMessages", showMessages);
 		allRadius = std::max(0.0f, ReadFloat(L"General", L"fAllScreensRadius", allRadius));

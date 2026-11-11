@@ -1302,7 +1302,7 @@ namespace fv::Remote
 			dirty |= Checkbox("Cinema: pause when far away or out of view", &s.cinemaFreeze);
 			Tip("Picture and sound pause, and carry on from the same spot when you look at the screen or come closer.");
 			if (s.cinemaFreeze) {
-				dirty |= Meters("...further away than##cfreeze", &s.cinemaFreezeDistance, 600.0f, "Or whenever the drive-in screen isn't in front of you.");
+				dirty |= Meters("...further away than##cfreeze", &s.cinemaFreezeDistance, 600.0f, "Or when it's behind you (see the option below).");
 				dirty |= SliderFloat("...for longer than##cfreeze", &s.cinemaFreezeSeconds, 0.0f, 120.0f, "%.0f s");
 			}
 			dirty |= Checkbox("Cinema: turn off when you walk away", &s.cinemaAutoOff);
@@ -1314,9 +1314,12 @@ namespace fv::Remote
 			dirty |= Checkbox("TVs, Projectors: pause when far away or out of view", &s.freeze);
 			Tip("Picture and sound pause, and carry on from the same spot when you look at the screen or come closer.");
 			if (s.freeze) {
-				dirty |= Meters("...further away than##freeze", &s.freezeDistance, 300.0f, "Or whenever the screen isn't in front of you.");
+				dirty |= Meters("...further away than##freeze", &s.freezeDistance, 300.0f, "Or when it's behind you (see the option below).");
 				dirty |= SliderFloat("...for longer than##freeze", &s.freezeSeconds, 0.0f, 120.0f, "%.0f s");
 			}
+			dirty |= Checkbox("Also pause screens that are behind you (out of view)", &s.freezeOutOfView);
+			Tip("For both pause options above. Off: screens only pause when far away, never because you looked away. "
+				"In view = anywhere in front of you or the third-person camera.");
 			dirty |= Checkbox("TVs, Projectors: turn off when you walk away", &s.autoOff);
 			Tip("Remembers the video and where it was, and carries on from there when you come back.");
 			if (s.autoOff) {

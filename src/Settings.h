@@ -78,6 +78,7 @@ namespace fv
 		bool  showMessages{ true };          // "playing ... / ... off" messages at the top left
 		float allRadius{ 10500.0f };         // "all screens here": within this (~150 m)
 		bool  freeze{ true };                // picture stops updating when far or out of view (sound carries on)
+		bool  freezeOutOfView{ true };       // ...also when out of view (behind you), not only when far away; all screens
 		float freezeDistance{ 3500.0f };     // ~50 m
 		float freezeSeconds{ 10.0f };
 		// the cinema has its own pause / turn-off distances (it's seen and heard from much further away)
