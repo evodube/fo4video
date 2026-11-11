@@ -1138,7 +1138,7 @@ namespace fv
 				if (haveCam && d > r) {
 					// inside a generous cone around where you look (wider than the screen's field of view), going by
 					// where the character faces or where the camera points
-					const float limit = 1.15f + std::asin(std::min(1.0f, r / d));  // ~66 degrees + the screen's size
+					const float limit = 1.5708f + std::asin(std::min(1.0f, r / d));  // 90 degrees (anything not behind) + the screen's size
 					const auto  within = [&](const RE::NiPoint3& a_dir) {
 						return std::acos(std::clamp(v.Dot(a_dir) / d, -1.0f, 1.0f)) < limit;
 					};
