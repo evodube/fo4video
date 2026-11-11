@@ -1020,14 +1020,22 @@ namespace fv
 			}
 		}
 
-		// where the camera is and where it looks, for "out of view"
-		RE::NiPoint3 camPos = playerPos, camDir{ 0.0f, 1.0f, 0.0f };
-		bool         haveCam = false;
+		// where the camera is and where it looks, for "out of view". Two directions: where the character faces
+		// (first person) and where the camera itself points (third person, where you can look around the character)
+		RE::NiPoint3 camPos = playerPos, camDir{ 0.0f, 1.0f, 0.0f }, lookDir{ 0.0f, 1.0f, 0.0f };
+		bool         haveCam = false, haveLook = false;
 		if (auto* camera = RE::PlayerCamera::GetSingleton(); camera && camera->cameraRoot && player) {
 			camPos = camera->cameraRoot->GetWorldTranslate();
 			const float pitch = player->data.angle.x, yaw = player->data.angle.z;
 			camDir = { std::sin(yaw) * std::cos(pitch), std::cos(yaw) * std::cos(pitch), -std::sin(pitch) };
 			haveCam = true;
+			const auto& m = camera->cameraRoot->world.rotate;  // the camera's forward (its Y axis)
+			lookDir = { m.entry[0].y, m.entry[1].y, m.entry[2].y };
+			const float len = lookDir.Length();
+			if (len > 0.5f && len < 2.0f) {
+				lookDir = lookDir / len;
+				haveLook = true;
+			}
 		}
 
 		// which settlement you're in (about once a second)
@@ -1128,10 +1136,13 @@ namespace fv
 				const float d = v.Length();
 				bool        inView = true;
 				if (haveCam && d > r) {
-					// inside a generous cone around where you look (wider than the screen's field of view)
-					const float cosAngle = v.Dot(camDir) / d;
-					const float angle = std::acos(std::clamp(cosAngle, -1.0f, 1.0f));
-					inView = angle < 1.15f + std::asin(std::min(1.0f, r / d));  // ~66 degrees + the screen's size
+					// inside a generous cone around where you look (wider than the screen's field of view), going by
+					// where the character faces or where the camera points
+					const float limit = 1.15f + std::asin(std::min(1.0f, r / d));  // ~66 degrees + the screen's size
+					const auto  within = [&](const RE::NiPoint3& a_dir) {
+						return std::acos(std::clamp(v.Dot(a_dir) / d, -1.0f, 1.0f)) < limit;
+					};
+					inView = within(camDir) || (haveLook && within(lookDir));
 				}
 				const bool unseen = d > freezeDistance || !inView;
 				const auto now = std::chrono::steady_clock::now();
