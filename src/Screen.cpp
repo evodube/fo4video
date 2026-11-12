@@ -245,6 +245,10 @@ namespace fv::Screen
 		// (a projector's screen, or a drive-in screen that can't be clicked in the console).
 		std::vector<Candidate> Candidates(RE::TESObjectREFR* a_ref, bool a_includeNearby)
 		{
+			// a video poster only ever plays on itself: never on a TV or film surface next to it
+			if (a_includeNearby && IsVideoPoster(a_ref)) {
+				a_includeNearby = false;
+			}
 			std::vector<Candidate> out;
 			CollectRef(a_ref, false, out);
 
