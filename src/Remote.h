@@ -8,7 +8,8 @@ namespace fv::Remote
 	void Register(const char* a_when);
 
 	// Main thread: open the remote for the screen under the crosshair (or the console pick), or close it.
-	void Toggle();
+	// a_pad: from the controller (L3 + R3) - opens in controller mode (no mouse cursor) and closes again
+	void Toggle(bool a_pad = false);
 
 	// Render thread, every frame: walk with W/A/S/D while the remote is open (the menu blocks the game's input).
 	void Tick();

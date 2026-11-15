@@ -1575,12 +1575,56 @@ namespace fv::Remote
 			}
 		}
 
+		// Controller mode: the remote opened with L3 + R3 runs without the menu framework's mouse cursor (which put the
+		// game into mouse-and-keyboard mode, so menus afterwards answered to the mouse). The controller drives the
+		// remote, and an input layer keeps the game from also acting on its buttons; walking and looking still work.
+		std::atomic<bool> g_padMode{ false };
+
+		void PadLayer(bool a_on)
+		{
+			static bool on = false;
+			if (on == a_on) {
+				return;
+			}
+			on = a_on;
+			auto* tasks = F4SE::GetTaskInterface();
+			if (!tasks) {
+				return;
+			}
+			tasks->AddTask([a_on]() {
+				static RE::BSTSmartPointer<RE::BSInputEnableLayer> layer;
+				auto* mgr = RE::BSInputEnableManager::GetSingleton();
+				if (!mgr) {
+					return;
+				}
+				if (!layer && !mgr->AllocateNewLayer(layer, "Real Videos remote")) {
+					log::warn("remote: couldn't get an input layer; the controller also reaches the game");
+					return;
+				}
+				using F = RE::UserEvents::USER_EVENT_FLAG;
+				constexpr auto kBlocked = static_cast<F>(
+					std::to_underlying(F::kActivate) | std::to_underlying(F::kMenu) | std::to_underlying(F::kPOVSwitch) |
+					std::to_underlying(F::kFighting) | std::to_underlying(F::kSneaking) | std::to_underlying(F::kMainFour) |
+					std::to_underlying(F::kWheelZoom) | std::to_underlying(F::kJumping) | std::to_underlying(F::kVATS));
+				mgr->EnableUserEvent(layer->layerID, kBlocked, !a_on, RE::UserEvents::SENDER_ID::kNone);
+				log::info("remote: controller mode {}", a_on ? "on (game buttons held back)" : "off");
+			});
+		}
+
+		void LeavePadMode()
+		{
+			if (g_padMode.exchange(false)) {
+				PadLayer(false);
+			}
+		}
+
 		void CursorMode(bool a_cursor)
 		{
 			if (!g_window || g_window->BlockUserInput.load() == a_cursor) {
 				return;
 			}
 			if (a_cursor) {
+				LeavePadMode();
 				if (auto* ui = RE::UI::GetSingleton()) {
 					g_menuModeBase = ui->menuMode;  // the framework pauses again when the cursor comes back
 					g_unfreezeFrames = 60;
@@ -1624,16 +1668,16 @@ namespace fv::Remote
 
 		constexpr WORD sticks = XINPUT_GAMEPAD_LEFT_THUMB | XINPUT_GAMEPAD_RIGHT_THUMB;
 		if ((cur & sticks) == sticks && (hit & sticks)) {
-			Toggle();  // same as the remote key: open, bring the cursor back, or close
+			Toggle(true);  // opens the remote in controller mode, or closes it
 			return;
 		}
 		if (!g_window->IsOpen.load()) {
 			return;
 		}
-		if (g_window->BlockUserInput.load()) {
-			// moving the left stick walks with the remote on screen, like W/A/S/D
+		if (g_window->BlockUserInput.load() || g_padMode.load()) {
+			// cursor mode: moving the left stick walks with the remote on screen, like W/A/S/D
 			const int lx = st.Gamepad.sThumbLX, ly = st.Gamepad.sThumbLY;
-			if (lx * lx + ly * ly > 16000 * 16000) {
+			if (g_window->BlockUserInput.load() && lx * lx + ly * ly > 16000 * 16000) {
 				CursorMode(false);
 				return;
 			}
@@ -1658,6 +1702,7 @@ namespace fv::Remote
 		PollPad();
 		const bool open = g_window && g_window->IsOpen.load();
 		if (!open) {
+			LeavePadMode();  // closed with B or the X button: give the buttons back to the game
 			return;
 		}
 		DWORD pid = 0;
@@ -1712,7 +1757,7 @@ namespace fv::Remote
 		log::info("remote ({}): registered with F4SE Menu Framework{}", a_when, g_window ? "" : " (window could not be created)");
 	}
 
-	void Toggle()
+	void Toggle(bool a_pad)
 	{
 		if (!g_window) {
 			Register("remote key");
@@ -1724,8 +1769,12 @@ namespace fv::Remote
 			return;
 		}
 		if (g_window->IsOpen) {
-			if (!g_window->BlockUserInput.load()) {
-				CursorMode(true);  // walking: F6 brings the cursor back first
+			if (a_pad) {
+				g_window->IsOpen = false;  // L3 + R3 always closes
+				LeavePadMode();
+				log::info("remote: closed");
+			} else if (!g_window->BlockUserInput.load()) {
+				CursorMode(true);  // walking or controller mode: F6 brings the cursor back first
 			} else {
 				g_window->IsOpen = false;
 				log::info("remote: closed");
@@ -1761,7 +1810,15 @@ namespace fv::Remote
 			g_menuModeBase = ui->menuMode;
 			g_unfreezeFrames = 60;
 		}
-		g_window->BlockUserInput = true;  // opens in cursor mode
+		if (a_pad) {
+			// controller: no mouse cursor (that put the game in mouse-and-keyboard mode); the controller drives it
+			g_window->BlockUserInput = false;
+			g_padMode = true;
+			PadLayer(true);
+			log::info("remote: opened from the controller (controller mode)");
+		} else {
+			g_window->BlockUserInput = true;  // opens in cursor mode
+		}
 		g_drawnSinceOpen = false;
 		log::info("remote: opening the window");
 		g_window->IsOpen = true;
