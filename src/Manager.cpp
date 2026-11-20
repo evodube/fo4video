@@ -1,5 +1,7 @@
 #include "Manager.h"
 
+#include "MenuWatch.h"
+
 #include "Compositor.h"
 #include "Remote.h"
 #include "Settings.h"
@@ -940,9 +942,8 @@ namespace fv
 		std::scoped_lock lock(_lock);
 
 		// Build mode: screens go dark (video paused) until it's closed
-		static const RE::BSFixedString workshopMenu("WorkshopMenu");
-		auto*                          ui = RE::UI::GetSingleton();
-		const bool                     buildMode = ui && ui->GetMenuOpen(workshopMenu);
+		// (from the menu events: asking the UI here held the workshop menu, which left its icons on screen; MenuWatch.h)
+		const bool buildMode = menus::Open(menus::kWorkshop);
 		if (buildMode != _inBuildMode) {
 			log::info("build mode {}: {} the videos", buildMode ? "opened" : "closed", buildMode ? "hiding" : "showing");
 			_inBuildMode = buildMode;
@@ -1950,12 +1951,10 @@ namespace fv
 		if (ui->menuMode != 0 || ui->freezeFramePause != 0) {
 			return true;  // any menu that pauses the game (Esc, Pip-Boy, console, containers...)
 		}
-		static const std::array<RE::BSFixedString, 5> menus{
-			RE::BSFixedString("PauseMenu"), RE::BSFixedString("PipboyMenu"), RE::BSFixedString("LoadingMenu"), RE::BSFixedString("MainMenu"),
-			RE::BSFixedString("WorkshopMenu")  // build mode: the video is hidden there too (see Maintain)
-		};
-		for (const auto& name : menus) {
-			if (ui->GetMenuOpen(name)) {
+		// (from the menu events, never UI::GetMenuOpen on the render thread: see MenuWatch.h)
+		for (const auto id : { menus::kPause, menus::kPipboy, menus::kLoading, menus::kMain,
+				 menus::kWorkshop }) {  // build mode: the video is hidden there too (see Maintain)
+			if (menus::Open(id)) {
 				return true;
 			}
 		}

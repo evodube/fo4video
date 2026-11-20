@@ -1,5 +1,6 @@
 #include "Manager.h"
 #include "Media.h"
+#include "MenuWatch.h"
 #include "Papyrus.h"
 #include "Remote.h"
 #include "Renderer.h"
@@ -22,6 +23,7 @@ namespace
 			fv::log::info("game data ready");
 			fv::Remote::Register("game data ready");  // no-op if already registered
 			fv::Settings::Get().Load();
+			fv::menus::Watch();
 			fv::MediaSource::StartupMF();
 			fv::Renderer::Install();
 			break;
