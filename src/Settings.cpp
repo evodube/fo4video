@@ -140,6 +140,7 @@ namespace fv
 		putFilm(L"TVFilm", tvFilm);
 		put(L"Screen", L"bCleanTVScreens", b(tvClean));
 		put(L"Screen", L"fBigScreenBrightness", f(bigScreenBrightness));
+		put(L"Screen", L"fTVBrightness", f(tvBrightness));
 		put(L"Screen", L"bOnlyInsideScreenArea", b(composite));
 		put(L"Screen", L"bShowOnBothSides", b(bothSides));
 		put(L"Screen", L"bHideOverlays", b(hideOverlays));
@@ -249,6 +250,7 @@ namespace fv
 		glowMap = ReadBool(L"Screen", L"bFrameLitByWorld", glowMap);
 		selfLitFaceOnly = ReadBool(L"Screen", L"bGlowPictureOnly", selfLitFaceOnly);
 		bigScreenBrightness = std::clamp(ReadFloat(L"Screen", L"fBigScreenBrightness", bigScreenBrightness), 0.1f, 4.0f);
+		tvBrightness = std::clamp(ReadFloat(L"Screen", L"fTVBrightness", tvBrightness), 0.1f, 4.0f);
 		startVolume = std::clamp(ReadFloat(L"Audio", L"fStartVolume", startVolume), 0.0f, 2.0f);
 		bigMinDistance = ReadFloat(L"Audio", L"fBigScreenMinDistance", bigMinDistance);
 		bigMaxDistance = std::max(ReadFloat(L"Audio", L"fBigScreenMaxDistance", bigMaxDistance), bigMinDistance + 1.0f);

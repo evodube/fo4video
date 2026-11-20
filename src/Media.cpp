@@ -945,6 +945,61 @@ namespace fv
 			return fail("the decoder's frame has no texture");
 		}
 
+		// When this PC can't share textures between devices (some drivers refuse every shared texture with
+		// E_INVALIDARG), the card still decodes and the small, already scaled frame is copied out through memory:
+		// far cheaper than decoding a big video on the CPU.
+		static std::atomic<bool> s_readback{ false };
+		const auto readback = [&]() {
+			D3D11_TEXTURE2D_DESC sd{};
+			src->GetDesc(&sd);
+			const UINT w = std::min(a_w, sd.Width > a_cropX ? sd.Width - a_cropX : 0u);
+			const UINT h = std::min(a_h, sd.Height > a_cropY ? sd.Height - a_cropY : 0u);
+			if (!w || !h) {
+				return false;
+			}
+			thread_local ComPtr<ID3D11Texture2D> staging;
+			thread_local UINT                    stW = 0, stH = 0;
+			thread_local DXGI_FORMAT             stF = DXGI_FORMAT_UNKNOWN;
+			if (!staging || stW != w || stH != h || stF != sd.Format) {
+				D3D11_TEXTURE2D_DESC desc{};
+				desc.Width = w;
+				desc.Height = h;
+				desc.MipLevels = 1;
+				desc.ArraySize = 1;
+				desc.Format = sd.Format;
+				desc.SampleDesc.Count = 1;
+				desc.Usage = D3D11_USAGE_STAGING;
+				desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+				staging.Reset();
+				if (FAILED(g_gpu.device->CreateTexture2D(&desc, nullptr, &staging))) {
+					return fail("couldn't make a texture to copy frames out of the graphics card");
+				}
+				stW = w;
+				stH = h;
+				stF = sd.Format;
+			}
+			D3D11_BOX box{ a_cropX, a_cropY, 0, a_cropX + w, a_cropY + h, 1 };
+			g_gpu.context->CopySubresourceRegion(staging.Get(), 0, 0, 0, 0, src.Get(), sub, &box);
+			D3D11_MAPPED_SUBRESOURCE map{};
+			if (FAILED(g_gpu.context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &map))) {
+				return fail("couldn't read a frame back from the graphics card");
+			}
+			a_frame.gpuTexture.Reset();
+			a_frame.gpuShared = nullptr;
+			a_frame.pixels.resize(static_cast<std::size_t>(w) * h * 4);
+			for (UINT y = 0; y < h; ++y) {
+				std::memcpy(a_frame.pixels.data() + static_cast<std::size_t>(y) * w * 4,
+					static_cast<const std::uint8_t*>(map.pData) + static_cast<std::size_t>(y) * map.RowPitch, static_cast<std::size_t>(w) * 4);
+			}
+			g_gpu.context->Unmap(staging.Get(), 0);
+			a_frame.width = w;
+			a_frame.height = h;
+			return true;
+		};
+		if (s_readback.load()) {
+			return readback();
+		}
+
 		// our shared texture for this frame (kept with the frame in the pool, remade if the size changes)
 		if (!a_frame.gpuTexture || a_frame.gpuWidth != a_w || a_frame.gpuHeight != a_h) {
 			a_frame.gpuTexture.Reset();
@@ -993,13 +1048,20 @@ namespace fv
 					tried += std::format("{}{}: {}", tried.empty() ? "" : ", ", kVariants[v].name, HrStr(hr));
 				}
 			}
-			if (!made) {
-				return fail(std::format("couldn't make a {}x{} shared texture ({})", a_w, a_h, tried).c_str());
-			}
 			ComPtr<IDXGIResource> res;
-			if (FAILED(a_frame.gpuTexture.As(&res)) || FAILED(res->GetSharedHandle(&a_frame.gpuShared))) {
+			if (made && (FAILED(a_frame.gpuTexture.As(&res)) || FAILED(res->GetSharedHandle(&a_frame.gpuShared)))) {
+				made = false;
+				tried = "no shared handle";
+			}
+			if (!made) {
 				a_frame.gpuTexture.Reset();
-				return fail("couldn't share the texture with the game");
+				a_frame.gpuShared = nullptr;
+				if (!s_readback.exchange(true)) {
+					log::warn("GPU decoding: this PC can't share textures with the game ({}x{}: {}); the card keeps decoding and "
+							  "the frames are copied over through memory",
+						a_w, a_h, tried);
+				}
+				return readback();
 			}
 			a_frame.gpuWidth = a_w;
 			a_frame.gpuHeight = a_h;

@@ -636,7 +636,7 @@ namespace fv::Remote
 				ImDrawListManager::AddText(dl, GetFont(), size, ImVec2{ at.x - ts.x * scale * 0.5f, at.y - ts.y * scale * 0.5f }, kIcon, all);
 			}
 
-			// brightness of this screen: a little sun and the percentage (dim on TVs: they stay as they are)
+			// brightness of this screen: a little sun and the percentage
 			{
 				const bool  usable = a_view.brightenable;
 				const ImU32 icon = usable ? kIcon : IM_COL32(90, 90, 90, 255);
@@ -1360,6 +1360,8 @@ namespace fv::Remote
 				"picture glows. Off: the whole screen glows.");
 			dirty |= Checkbox("Cinema: stretch to fill the screen", &s.bigScreenStretch);
 			dirty |= Percent("Cinema brightness", &s.bigScreenBrightness, 4.0f, "100% = as is, up to 400%. Only the drive-in screen. Applies right away.");
+			dirty |= Percent("TV brightness", &s.tvBrightness, 4.0f,
+				"100% = as is, up to 400%. All TVs; each TV's remote brightness dims it from there. Applies right away.");
 			dirty |= Checkbox("Projectors: stretch to fill the screen", &s.projectorStretch);
 			Tip("Off: the video keeps its shape with black bars. Applies when a video starts (or press Apply below).");
 			dirty |= Checkbox("Video posters: stretch to fill the poster", &s.posterStretch);

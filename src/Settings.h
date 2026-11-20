@@ -103,6 +103,7 @@ namespace fv
 		Film  projectorFilm{};
 		Film  tvFilm{};  // TVs' own old film look (all 0 = off)
 		float bigScreenBrightness{ 1.15f };  // big screens (the drive-in): picture brightness
+		float tvBrightness{ 1.0f };          // TVs: picture brightness (each TV's remote brightness on top)
 		bool  selfLit{ true };               // projector & cinema screens glow like TVs (same brightness day/night, any direction)
 		bool  selfLitLatePass{ true };
 		bool  selfLitFaceOnly{ true };       // only the picture glows (a glowing copy over it); frame keeps normal lighting

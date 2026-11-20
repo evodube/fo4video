@@ -1113,7 +1113,7 @@ namespace fv
 				const auto key = PrefKey(*p);
 				const auto it = _prefs.find(key);
 				p->brightness = it != _prefs.end() ? it->second.brightness : 1.0f;
-				p->brightenable = p->binding.bound && !p->binding.classic;  // TVs: no brightness control (removed on request)
+				p->brightenable = p->binding.bound;
 			}
 
 			// far away or out of view for a while: stop updating the picture (the sound carries on). Comes back
@@ -2284,7 +2284,7 @@ namespace fv
 			if (glowing || (b.bound && b.glowMap)) {
 				Screen::SetGlow(b, 1.0f);
 			}
-			const float pictureBright = (b.bigScreen ? settings.bigScreenBrightness : 1.0f) * screenBright;
+			const float pictureBright = (b.bigScreen ? settings.bigScreenBrightness : b.classic ? settings.tvBrightness : 1.0f) * screenBright;
 			const float pictureFx[4]{ pictureBright, 0.0f, static_cast<float>(std::fmod(seconds, 3600.0)), 0.0f };
 			// old film look: the cinema, projectors and TVs each have their own
 			const Settings::Film* filmSet = !b.bound ? nullptr :
