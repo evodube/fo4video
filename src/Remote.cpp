@@ -1361,7 +1361,8 @@ namespace fv::Remote
 			dirty |= Checkbox("Cinema: stretch to fill the screen", &s.bigScreenStretch);
 			dirty |= Percent("Cinema brightness", &s.bigScreenBrightness, 4.0f, "100% = as is, up to 400%. Only the drive-in screen. Applies right away.");
 			dirty |= Percent("TV brightness", &s.tvBrightness, 4.0f,
-				"100% = as is, up to 400%. All TVs; each TV's remote brightness dims it from there. Applies right away.");
+				"Default 75%: TV screens glow, so 100% can look blown out. Up to 400%. All TVs; each TV's remote brightness "
+				"dims it from there. Applies right away.");
 			dirty |= Checkbox("Projectors: stretch to fill the screen", &s.projectorStretch);
 			Tip("Off: the video keeps its shape with black bars. Applies when a video starts (or press Apply below).");
 			dirty |= Checkbox("Video posters: stretch to fill the poster", &s.posterStretch);
